@@ -258,6 +258,85 @@ async function syncAllowedOrigins() {
   }
 }
 
+const PROVIDER_ENV_KEYS = ["BRAVE_API_KEY", "DEEPSEEK_API_KEY"];
+
+/** Mirror Railway/provider secrets into OpenClaw's trusted runtime dotenv + config. */
+async function syncProviderEnvSecrets() {
+  const lines = [];
+  for (const key of PROVIDER_ENV_KEYS) {
+    const value = String(process.env[key] || "").trim();
+    if (value) lines.push(`${key}=${value}`);
+  }
+  if (!lines.length) return;
+
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    const envPath = path.join(STATE_DIR, ".env");
+    fs.writeFileSync(envPath, `${lines.join("\n")}\n`, { encoding: "utf8", mode: 0o600 });
+    log.info("env-sync", `wrote ${lines.length} provider key(s) to ${envPath}`);
+  } catch (err) {
+    log.warn("env-sync", `failed to write ${STATE_DIR}/.env: ${err.message}`);
+  }
+
+  if (!isConfigured()) return;
+
+  if (process.env.BRAVE_API_KEY?.trim()) {
+    const searchConfig = {
+      enabled: true,
+      provider: "brave",
+      maxResults: 8,
+      timeoutSeconds: 30,
+    };
+    const bravePlugin = {
+      config: {
+        webSearch: {
+          apiKey: process.env.BRAVE_API_KEY.trim(),
+          mode: "web",
+        },
+      },
+    };
+    const toolsResult = await runCmd(
+      OPENCLAW_NODE,
+      clawArgs([
+        "config",
+        "set",
+        "--json",
+        "tools.web.search",
+        JSON.stringify(searchConfig),
+      ]),
+    );
+    const pluginResult = await runCmd(
+      OPENCLAW_NODE,
+      clawArgs([
+        "config",
+        "set",
+        "--json",
+        "plugins.entries.brave",
+        JSON.stringify(bravePlugin),
+      ]),
+    );
+    log.info(
+      "env-sync",
+      `brave web_search tools.web.search exit=${toolsResult.code} plugins.entries.brave exit=${pluginResult.code}`,
+    );
+  }
+
+  if (process.env.DEEPSEEK_API_KEY?.trim()) {
+    const envBlock = { DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY.trim() };
+    const envResult = await runCmd(
+      OPENCLAW_NODE,
+      clawArgs([
+        "config",
+        "set",
+        "--json",
+        "env",
+        JSON.stringify(envBlock),
+      ]),
+    );
+    log.info("env-sync", `config env.DEEPSEEK_API_KEY exit=${envResult.code}`);
+  }
+}
+
 async function syncTrustedProxies() {
   const expected = ["127.0.0.1", "::1"];
   const current = await runCmd(
@@ -490,6 +569,7 @@ async function ensureGatewayRunning() {
   }
   if (!gatewayStarting) {
     gatewayStarting = (async () => {
+      await syncProviderEnvSecrets();
       await syncTrustedProxies();
       await syncAllowedOrigins();
       await startGateway();
@@ -944,7 +1024,10 @@ function buildOnboardArgs(payload) {
   if (payload.authChoice) {
     args.push("--auth-choice", payload.authChoice);
 
-    const secret = (payload.authSecret || "").trim();
+    const secret = (payload.authSecret || "").trim()
+      || (payload.authChoice === "deepseek-api-key"
+        ? String(process.env.DEEPSEEK_API_KEY || "").trim()
+        : "");
     const map = {
       apiKey: "--anthropic-api-key",
       "openai-api-key": "--openai-api-key",
@@ -1232,6 +1315,9 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
           appToken: payload.slackAppToken?.trim() || undefined,
         });
       }
+
+      stream("\n[setup] Syncing provider env secrets (Brave / DeepSeek)...\n");
+      await syncProviderEnvSecrets();
 
       stream("\n[setup] Starting gateway...\n");
       await restartGateway();
