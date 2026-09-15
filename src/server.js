@@ -322,16 +322,10 @@ async function syncProviderEnvSecrets() {
   }
 
   if (process.env.DEEPSEEK_API_KEY?.trim()) {
-    const envBlock = { DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY.trim() };
+    const deepseekKey = process.env.DEEPSEEK_API_KEY.trim();
     const envResult = await runCmd(
       OPENCLAW_NODE,
-      clawArgs([
-        "config",
-        "set",
-        "--json",
-        "env",
-        JSON.stringify(envBlock),
-      ]),
+      clawArgs(["config", "set", "env.DEEPSEEK_API_KEY", deepseekKey]),
     );
     log.info("env-sync", `config env.DEEPSEEK_API_KEY exit=${envResult.code}`);
   }
