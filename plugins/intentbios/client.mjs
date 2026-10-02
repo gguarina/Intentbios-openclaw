@@ -106,13 +106,38 @@ export function compactIntentCreate(body) {
   };
 }
 
+const ASK_STATUS_RE =
+  /Current step is [\s\S]*?Ask can coach this step; it does not mark it complete\.\s*Current block: [^.]+?\./g;
+
+function stripAskStatusPreamble(text) {
+  return String(text || "")
+    .replace(ASK_STATUS_RE, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isAskStatusOnlyReply(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return false;
+  if (!/Ask can coach this step; it does not mark it complete/.test(raw)) return false;
+  return stripAskStatusPreamble(raw).length < 40;
+}
+
 export function compactJourneyMessage(body, intentId, coachingNote) {
-  let reply = body?.reply ?? null;
-  if (coachingNote) {
-    reply = reply
-      ? String(reply) + "\n\n" + coachingNote
-      : coachingNote;
+  const rawReply = body?.reply ?? null;
+  const intentbiosCoached = body?.coached === true || body?.hasLessonCoaching === true;
+  let reply = rawReply;
+
+  if (intentbiosCoached && rawReply && !isAskStatusOnlyReply(rawReply)) {
+    // Intentbios already returned a tutoring reply — do not re-append status or duplicate notes.
+    reply = stripAskStatusPreamble(rawReply) || rawReply;
+  } else if (coachingNote) {
+    // Prefer the frontier lesson note alone; never keep the status preamble in front.
+    reply = coachingNote;
+  } else if (rawReply && isAskStatusOnlyReply(rawReply)) {
+    reply = rawReply;
   }
+
   return {
     intentId,
     reply,
@@ -121,7 +146,8 @@ export function compactJourneyMessage(body, intentId, coachingNote) {
     progress: body?.progress ?? null,
     journeyVersion: body?.journeyVersion ?? null,
     goalId: body?.goalId || null,
-    hasLessonCoaching: Boolean(coachingNote),
+    hasLessonCoaching: Boolean(coachingNote) || intentbiosCoached,
+    coached: intentbiosCoached || Boolean(coachingNote),
   };
 }
 

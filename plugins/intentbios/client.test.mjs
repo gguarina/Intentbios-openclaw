@@ -167,8 +167,11 @@ test("smoke: create an intent then send an Ask against mocked Intentbios", async
   assert.equal(seen[0].body.rawInput, "Learn enough Rust to write a CLI");
   assert.equal(seen[1].url, "/api/intents/int_1/journey/message");
   assert.equal(seen[1].body.message, "I can study 4 hours this week");
-  assert.equal(seen[2].body.actionTarget, "clarifyIntent");
-  assert.deepEqual(seen[2].body.payload, { optionId: "learn" });
+  // journey_message may enrich with GET intent/goal/journey-graphs after the Ask.
+  const executedCall = seen.find((row) => row.url === "/api/intents/int_1/execute");
+  assert.ok(executedCall);
+  assert.equal(executedCall.body.actionTarget, "clarifyIntent");
+  assert.deepEqual(executedCall.body.payload, { optionId: "learn" });
 });
 
 test("missing user id is rejected before any HTTP call", async () => {
@@ -197,4 +200,24 @@ test("live smoke", { skip: !process.env.INTENTBIOS_SMOKE_URL }, async () => {
     { baseUrl: process.env.INTENTBIOS_SMOKE_URL },
   );
   assert.equal(typeof asked.reply, "string");
+});
+
+test("status preamble is dropped when coachingNote is present", async () => {
+  const { compactJourneyMessage } = await import("./client.mjs");
+  const status =
+    "Current step is Unit circle (STUDY). This step stays with you. Ask can coach this step; it does not mark it complete. Current block: Overview.";
+  const note = "Lesson coaching from Intentbios (generatedBy=llm) for **Unit circle**:\n\nThe unit circle maps angle to (cos, sin).";
+  const compacted = compactJourneyMessage({ reply: status }, "int_1", note);
+  assert.equal(compacted.reply, note);
+  assert.equal(compacted.hasLessonCoaching, true);
+  assert.doesNotMatch(compacted.reply, /Ask can coach this step/);
+
+  const already = compactJourneyMessage(
+    { reply: "The unit circle maps angle to cosine and sine on the axes.", coached: true, hasLessonCoaching: true },
+    "int_1",
+    note,
+  );
+  assert.match(already.reply, /unit circle maps angle/i);
+  assert.doesNotMatch(already.reply, /Ask can coach this step/);
+  assert.doesNotMatch(already.reply, /Lesson coaching from Intentbios/);
 });
