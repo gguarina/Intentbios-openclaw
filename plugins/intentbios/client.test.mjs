@@ -437,3 +437,93 @@ test("status-only ask is a clipped frontier note and acknowledgements stay put",
     await server.close();
   }
 });
+
+test("message ok keeps the status-only Intentbios reply", async () => {
+  const { compactJourneyMessage } = await import("./client.mjs");
+  const status =
+    "Current step is Degrees and radians (STUDY). This step stays with you. Ask can coach this step; it does not mark it complete. Current block: Overview.";
+  const note = "Lesson coaching from Intentbios (generatedBy=llm) for **Degrees and radians**:\n\nRadians measure arc length.";
+  const kept = compactJourneyMessage(
+    { reply: status, coached: false, hasLessonCoaching: false },
+    "int_1",
+    note,
+    { userMessage: "ok" },
+  );
+  assert.equal(kept.reply, status);
+  assert.equal(kept.coached, false);
+  assert.equal(kept.hasLessonCoaching, false);
+  assert.doesNotMatch(kept.reply, /Lesson coaching from Intentbios/);
+
+  const seen = [];
+  const sentence = "Radians measure arc length on a circle of radius one. ";
+  const overview = sentence.repeat(40);
+  const server = await listen(async (req, res) => {
+    seen.push(req.url);
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const raw = Buffer.concat(chunks).toString("utf8");
+    const body = raw ? JSON.parse(raw) : null;
+    res.setHeader("Content-Type", "application/json");
+    if (req.url === "/api/intents/int_1/journey/message" && req.method === "POST") {
+      assert.equal(body?.message, "ok");
+      res.writeHead(200);
+      res.end(JSON.stringify({
+        success: true,
+        reply: status,
+        coached: false,
+        hasLessonCoaching: false,
+        goalId: "goal_1",
+      }));
+      return;
+    }
+    if (req.url === "/api/intents/int_1") {
+      res.writeHead(200);
+      res.end(JSON.stringify({ success: true, intent: { id: "int_1", goalId: "goal_1" } }));
+      return;
+    }
+    if (req.url === "/api/goals/goal_1") {
+      res.writeHead(200);
+      res.end(JSON.stringify({
+        success: true,
+        executionState: { currentNodeId: "n1" },
+        graph: {
+          id: "goal_1",
+          nodes: [{
+            id: "n1",
+            label: "Degrees and radians",
+            learningMaterial: { generatedBy: "llm", overviewMarkdown: overview, coreConcepts: [] },
+          }],
+        },
+      }));
+      return;
+    }
+    if (req.url === "/api/intents/int_1/journey-graphs") {
+      res.writeHead(200);
+      res.end(JSON.stringify({
+        success: true,
+        bundle: {
+          goalGraph: { nodes: [{ nodeKey: "n1", metadata: { interaction: "STUDY" } }] },
+          nodeStates: { n1: { state: "AVAILABLE" } },
+        },
+      }));
+      return;
+    }
+    res.writeHead(404);
+    res.end(JSON.stringify({ success: false, error: "not found" }));
+  });
+
+  try {
+    const asked = await executeIntentbiosTool(
+      "journey_message",
+      { intentId: "int_1", message: "ok", userId: "grok-bot" },
+      { baseUrl: server.baseUrl },
+    );
+    assert.equal(asked.reply, status);
+    assert.equal(asked.coached, false);
+    assert.equal(asked.hasLessonCoaching, false);
+    assert.doesNotMatch(asked.reply, /Lesson coaching from Intentbios/);
+    assert.equal(seen.includes("/api/goals/goal_1"), false);
+  } finally {
+    await server.close();
+  }
+});

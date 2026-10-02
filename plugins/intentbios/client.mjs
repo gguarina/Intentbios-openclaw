@@ -153,6 +153,24 @@ function isAcknowledgementReply(text) {
   return /^(noted|got it|okay|ok|thanks|thank you|understood|acknowledged)\b/i.test(raw);
 }
 
+/**
+ * Learner turns that only acknowledge ("ok", "noted", "got it").
+ * A content question that happens to start with "ok" is not an ack.
+ */
+function isExplicitUserAcknowledgement(message) {
+  const raw = String(message || "").trim();
+  if (!raw || raw.length > 48) return false;
+  const normalized = raw
+    .replace(/[.!?]+$/g, "")
+    .replace(/,/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  return /^(?:ok|okay|k|kk|noted|got it|thanks|thank you|thx|understood|acknowledged|alright|all right|sure|yes|yep|yeah|yup|cool|sounds good)(?: (?:thanks|thank you|thx|noted|got it))?$/.test(
+    normalized,
+  );
+}
+
 function intentbiosAlreadyCoached(body) {
   return body?.coached === true || body?.hasLessonCoaching === true;
 }
@@ -164,7 +182,11 @@ function isSubstantiveCoachedReply(body) {
   return true;
 }
 
-export function compactJourneyMessage(body, intentId, coachingNote) {
+export function compactJourneyMessage(body, intentId, coachingNote, options = {}) {
+  const userMessage = options && typeof options === "object" ? options.userMessage : "";
+  // "ok" → Intentbios status sentence. Do not swap in the frontier lesson.
+  if (isExplicitUserAcknowledgement(userMessage)) coachingNote = null;
+
   const rawReply = body?.reply ?? null;
   const intentbiosCoached = intentbiosAlreadyCoached(body);
   const raw = rawReply == null ? "" : String(rawReply);
@@ -368,9 +390,13 @@ export async function executeIntentbiosTool(toolName, args = {}, options = {}) {
       { method: "POST", body: { message, userId } },
     );
     let coachingNote = null;
-    // A substantive coached reply, or a plain acknowledgement, must not be
-    // rebuilt from the open lesson. Status-only Asks still pick up the frontier note.
-    const skipLessonNote = isSubstantiveCoachedReply(asked) || isAcknowledgementReply(asked?.reply);
+    // Explicit acks ("ok") and acknowledgement replies stay as Intentbios sent
+    // them, including a status-only sentence. Frontier notes are only for a
+    // content question that came back without a substantive coach answer.
+    const skipLessonNote =
+      isExplicitUserAcknowledgement(message) ||
+      isSubstantiveCoachedReply(asked) ||
+      isAcknowledgementReply(asked?.reply);
     if (!skipLessonNote) {
       try {
         const intentBody = await call(`/api/intents/${encodeURIComponent(intentId)}`, { method: "GET" });
@@ -417,7 +443,7 @@ export async function executeIntentbiosTool(toolName, args = {}, options = {}) {
         // Keep Ask moving even if lesson enrich fails.
       }
     }
-    return compactJourneyMessage(asked, intentId, coachingNote);
+    return compactJourneyMessage(asked, intentId, coachingNote, { userMessage: message });
   }
 
   if (name === "intent_execute") {
