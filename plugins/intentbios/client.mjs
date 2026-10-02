@@ -106,16 +106,81 @@ export function compactIntentCreate(body) {
   };
 }
 
-export function compactJourneyMessage(body, intentId) {
+export function compactJourneyMessage(body, intentId, coachingNote) {
+  let reply = body?.reply ?? null;
+  if (coachingNote) {
+    reply = reply
+      ? String(reply) + "\n\n" + coachingNote
+      : coachingNote;
+  }
   return {
     intentId,
-    reply: body?.reply ?? null,
+    reply,
     advanced: body?.advanced || [],
     nodeStateChanged: Boolean(body?.nodeStateChanged),
     progress: body?.progress ?? null,
     journeyVersion: body?.journeyVersion ?? null,
     goalId: body?.goalId || null,
+    hasLessonCoaching: Boolean(coachingNote),
   };
+}
+
+function isTeachableLesson(node) {
+  const lm = node?.learningMaterial || {};
+  if (lm.generatedBy !== "llm") return false;
+  const overview = String(lm.overviewMarkdown || "").trim();
+  const concepts = Array.isArray(lm.coreConcepts) ? lm.coreConcepts : [];
+  if (overview.length >= 24) return true;
+  return concepts.some((c) => String(c?.explanation || c?.explanationMarkdown || c?.body || "").trim().length >= 24);
+}
+
+function coachingTextFromNode(node) {
+  if (!node || !isTeachableLesson(node)) return null;
+  const lm = node.learningMaterial || {};
+  const overview = String(lm.overviewMarkdown || "").trim().slice(0, 1200);
+  const concepts = Array.isArray(lm.coreConcepts) ? lm.coreConcepts : [];
+  const conceptBit = concepts
+    .slice(0, 3)
+    .map((c) => {
+      const title = c?.title || c?.name || "Concept";
+      const expl = String(c?.explanation || c?.explanationMarkdown || c?.body || "").trim().slice(0, 350);
+      return expl ? "**" + title + ":** " + expl : null;
+    })
+    .filter(Boolean)
+    .join("\n\n");
+  const parts = [
+    "Lesson coaching from Intentbios (generatedBy=llm) for **" + (node.label || node.id) + "**:",
+    overview,
+    conceptBit,
+  ].filter(Boolean);
+  return parts.join("\n\n");
+}
+
+/**
+ * Bind Ask coaching to the active frontier STUDY node — never a later ready lesson.
+ * Prefer explicit nodeId, then executionState.currentNodeId, then first AVAILABLE/IN_PROGRESS
+ * STUDY from journey nodeStates (goal-graph order). Fall back only within that same node.
+ */
+function coachingNoteFromGoal(goalBody, preferNodeId, frontierHint) {
+  const graph = goalBody?.graph || {};
+  const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
+  if (!nodes.length) return null;
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+
+  const candidates = [];
+  if (preferNodeId) candidates.push(String(preferNodeId));
+  if (frontierHint?.currentNodeId) candidates.push(String(frontierHint.currentNodeId));
+  for (const key of frontierHint?.openStudyNodeKeys || []) candidates.push(String(key));
+
+  for (const id of candidates) {
+    const node = byId.get(id);
+    const note = coachingTextFromNode(node);
+    if (note) return note;
+  }
+
+  // Last resort: still only use teachable material on an explicitly open STUDY node
+  // from goal order — do not pick an arbitrary ready later skill.
+  return null;
 }
 
 export function compactExecute(body, intentId) {
@@ -159,12 +224,29 @@ export function compactLessonStatus({ intentBody, goalBody, statusBody }) {
     intentId: intentBody?.intent?.id || null,
     goalId: graph.id || intentBody?.intent?.goalId || null,
     generationStatus: statusBody?.generationStatus || graph.generationStatus || null,
-    lessons: nodes.map((node) => ({
-      id: node.id,
-      label: node.label,
-      lessonStatus: node.lessonStatus || null,
-      attempt: node.lessonAttempt?.attempt ?? null,
-    })),
+    lessons: nodes.map((node) => {
+      const lm = node.learningMaterial || {};
+      const concepts = Array.isArray(lm.coreConcepts) ? lm.coreConcepts : [];
+      return {
+        id: node.id,
+        label: node.label,
+        lessonStatus: node.lessonStatus || null,
+        attempt: node.lessonAttempt?.attempt ?? null,
+        generatedBy: lm.generatedBy || null,
+        overviewMarkdown:
+          node.lessonStatus === "ready" && lm.generatedBy === "llm"
+            ? String(lm.overviewMarkdown || "").slice(0, 1200)
+            : null,
+        conceptTitles: concepts.slice(0, 4).map((c) => c?.title || c?.name).filter(Boolean),
+        conceptExcerpts:
+          node.lessonStatus === "ready" && lm.generatedBy === "llm"
+            ? concepts.slice(0, 2).map((c) => ({
+                title: c?.title || c?.name || "Concept",
+                explanation: String(c?.explanation || c?.explanationMarkdown || c?.body || "").slice(0, 400),
+              }))
+            : [],
+      };
+    }),
   };
 }
 
@@ -211,7 +293,52 @@ export async function executeIntentbiosTool(toolName, args = {}, options = {}) {
       `/api/intents/${encodeURIComponent(intentId)}/journey/message`,
       { method: "POST", body: { message, userId } },
     );
-    return compactJourneyMessage(asked, intentId);
+    let coachingNote = null;
+    try {
+      const intentBody = await call(`/api/intents/${encodeURIComponent(intentId)}`, { method: "GET" });
+      const goalId = intentBody?.intent?.goalId || asked?.goalId || args.goalId || "";
+      if (goalId) {
+        const [goalBody, graphsBody] = await Promise.all([
+          call(`/api/goals/${encodeURIComponent(goalId)}`, { method: "GET" }),
+          call(`/api/intents/${encodeURIComponent(intentId)}/journey-graphs`, { method: "GET" }).catch(() => null),
+        ]);
+        const bundle = graphsBody?.bundle || {};
+        const nodeStates = bundle.nodeStates || {};
+        const goalNodes = Array.isArray(bundle.goalGraph?.nodes) ? bundle.goalGraph.nodes : [];
+        const openStudyNodeKeys = goalNodes
+          .filter((n) => {
+            const st = nodeStates[n.nodeKey]?.state;
+            const interaction = n.metadata?.interaction;
+            return (st === "AVAILABLE" || st === "IN_PROGRESS") && interaction === "STUDY";
+          })
+          .map((n) => n.nodeKey);
+        // Also honor first open node in goal order when interaction missing
+        if (!openStudyNodeKeys.length) {
+          for (const n of goalNodes) {
+            const st = nodeStates[n.nodeKey]?.state;
+            if (st === "AVAILABLE" || st === "IN_PROGRESS") {
+              openStudyNodeKeys.push(n.nodeKey);
+              break;
+            }
+          }
+        }
+        const frontierHint = {
+          currentNodeId:
+            goalBody?.executionState?.currentNodeId ||
+            openStudyNodeKeys[0] ||
+            null,
+          openStudyNodeKeys,
+        };
+        coachingNote = coachingNoteFromGoal(
+          goalBody,
+          args.nodeId || args.nodeKey || null,
+          frontierHint,
+        );
+      }
+    } catch (enrichErr) {
+      // Keep Ask moving even if lesson enrich fails.
+    }
+    return compactJourneyMessage(asked, intentId, coachingNote);
   }
 
   if (name === "intent_execute") {
