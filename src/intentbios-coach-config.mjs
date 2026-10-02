@@ -46,7 +46,10 @@ function appendPath(paths, pluginPath) {
 }
 
 function unionAllow(existing, required) {
-  return uniqueStrings([...(Array.isArray(existing) ? existing : []), ...required]);
+  return uniqueStrings([
+    ...(Array.isArray(existing) ? existing : []),
+    ...(Array.isArray(required) ? required : []),
+  ]);
 }
 
 function withoutNames(existing, names) {
@@ -88,7 +91,18 @@ function ensureCoachAgent(agents, workspaceDir) {
     ? { ...seeded[COACH_AGENT_ID] }
     : {};
   const tools = isPlainObject(current.tools) ? { ...current.tools } : {};
-  const allow = unionAllow(tools.allow, unionAllow(tools.alsoAllow, COACH_TOOL_NAMES));
+  // OpenClaw applies tools.profile before the agent allowlist, and that profile
+  // is not part of the empty-allowlist error. A restrictive global profile
+  // (coding, messaging, minimal) drops plugin tools first, then
+  // agents.intentbios-coach.tools.allow matches nothing and the chat run 500s.
+  // `full` contributes "*" so the coach tools are materialized, then `allow`
+  // narrows the agent to those tools. The plugin id expands only to this
+  // plugin's tools once they are registered.
+  tools.profile = "full";
+  const allow = unionAllow(unionAllow(tools.allow, tools.alsoAllow), [
+    ...COACH_TOOL_NAMES,
+    PLUGIN_ID,
+  ]);
   delete tools.alsoAllow;
   tools.allow = allow;
   if (Array.isArray(tools.deny)) {
