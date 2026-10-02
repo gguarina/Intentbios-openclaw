@@ -109,11 +109,34 @@ export function compactIntentCreate(body) {
 const ASK_STATUS_RE =
   /Current step is [\s\S]*?Ask can coach this step; it does not mark it complete\.\s*Current block: [^.]+?\./g;
 
+/** Defense in depth: coach replies should stay a short tutoring turn. */
+export const JOURNEY_REPLY_MAX_CHARS = 800;
+
+/**
+ * Clip at the last sentence end at or before `max`.
+ * If no sentence boundary falls in the latter half of the window, cut on a word.
+ */
+export function clipAtSentenceBoundary(text, max = JOURNEY_REPLY_MAX_CHARS) {
+  const raw = String(text ?? "").trim();
+  if (!raw || raw.length <= max) return raw;
+  const window = raw.slice(0, max);
+  const min = Math.floor(max * 0.5);
+  let end = -1;
+  for (const match of window.matchAll(/[.!?](?=\s|$)/g)) {
+    const boundary = match.index + 1;
+    if (boundary >= min) end = boundary;
+  }
+  if (end > 0) return raw.slice(0, end).trim();
+  const space = window.lastIndexOf(" ");
+  const cut = space >= min ? space : max;
+  return raw.slice(0, cut).trim();
+}
+
 function stripAskStatusPreamble(text) {
-  return String(text || "")
-    .replace(ASK_STATUS_RE, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const raw = String(text || "");
+  const stripped = raw.replace(ASK_STATUS_RE, " ");
+  if (stripped === raw) return raw.trim();
+  return stripped.replace(/\s+/g, " ").trim();
 }
 
 function isAskStatusOnlyReply(text) {
@@ -123,19 +146,44 @@ function isAskStatusOnlyReply(text) {
   return stripAskStatusPreamble(raw).length < 40;
 }
 
+function isAcknowledgementReply(text) {
+  const raw = String(text || "").trim();
+  if (!raw || raw.length > 160) return false;
+  if (isAskStatusOnlyReply(raw)) return false;
+  return /^(noted|got it|okay|ok|thanks|thank you|understood|acknowledged)\b/i.test(raw);
+}
+
+function intentbiosAlreadyCoached(body) {
+  return body?.coached === true || body?.hasLessonCoaching === true;
+}
+
+function isSubstantiveCoachedReply(body) {
+  const raw = String(body?.reply || "").trim();
+  if (!intentbiosAlreadyCoached(body) || !raw) return false;
+  if (isAskStatusOnlyReply(raw) || isAcknowledgementReply(raw)) return false;
+  return true;
+}
+
 export function compactJourneyMessage(body, intentId, coachingNote) {
   const rawReply = body?.reply ?? null;
-  const intentbiosCoached = body?.coached === true || body?.hasLessonCoaching === true;
+  const intentbiosCoached = intentbiosAlreadyCoached(body);
+  const raw = rawReply == null ? "" : String(rawReply);
   let reply = rawReply;
 
-  if (intentbiosCoached && rawReply && !isAskStatusOnlyReply(rawReply)) {
-    // Intentbios already returned a tutoring reply — do not re-append status or duplicate notes.
-    reply = stripAskStatusPreamble(rawReply) || rawReply;
-  } else if (coachingNote) {
-    // Prefer the frontier lesson note alone; never keep the status preamble in front.
-    reply = coachingNote;
-  } else if (rawReply && isAskStatusOnlyReply(rawReply)) {
+  if (isSubstantiveCoachedReply(body)) {
+    // Intentbios already returned the tutoring reply. Do not concatenate the lesson dump.
+    const stripped = stripAskStatusPreamble(raw);
+    reply = clipAtSentenceBoundary(stripped || raw);
+  } else if (isAcknowledgementReply(raw) || (raw && isAskStatusOnlyReply(raw) && !coachingNote)) {
+    // Acknowledgements and status-only Asks stay status-only.
     reply = rawReply;
+  } else if (coachingNote) {
+    // Status preamble is dropped; the frontier note stands alone, clipped.
+    reply = clipAtSentenceBoundary(coachingNote);
+  } else if (raw) {
+    reply = isAskStatusOnlyReply(raw) || isAcknowledgementReply(raw)
+      ? rawReply
+      : clipAtSentenceBoundary(raw);
   }
 
   return {
@@ -320,49 +368,54 @@ export async function executeIntentbiosTool(toolName, args = {}, options = {}) {
       { method: "POST", body: { message, userId } },
     );
     let coachingNote = null;
-    try {
-      const intentBody = await call(`/api/intents/${encodeURIComponent(intentId)}`, { method: "GET" });
-      const goalId = intentBody?.intent?.goalId || asked?.goalId || args.goalId || "";
-      if (goalId) {
-        const [goalBody, graphsBody] = await Promise.all([
-          call(`/api/goals/${encodeURIComponent(goalId)}`, { method: "GET" }),
-          call(`/api/intents/${encodeURIComponent(intentId)}/journey-graphs`, { method: "GET" }).catch(() => null),
-        ]);
-        const bundle = graphsBody?.bundle || {};
-        const nodeStates = bundle.nodeStates || {};
-        const goalNodes = Array.isArray(bundle.goalGraph?.nodes) ? bundle.goalGraph.nodes : [];
-        const openStudyNodeKeys = goalNodes
-          .filter((n) => {
-            const st = nodeStates[n.nodeKey]?.state;
-            const interaction = n.metadata?.interaction;
-            return (st === "AVAILABLE" || st === "IN_PROGRESS") && interaction === "STUDY";
-          })
-          .map((n) => n.nodeKey);
-        // Also honor first open node in goal order when interaction missing
-        if (!openStudyNodeKeys.length) {
-          for (const n of goalNodes) {
-            const st = nodeStates[n.nodeKey]?.state;
-            if (st === "AVAILABLE" || st === "IN_PROGRESS") {
-              openStudyNodeKeys.push(n.nodeKey);
-              break;
+    // A substantive coached reply, or a plain acknowledgement, must not be
+    // rebuilt from the open lesson. Status-only Asks still pick up the frontier note.
+    const skipLessonNote = isSubstantiveCoachedReply(asked) || isAcknowledgementReply(asked?.reply);
+    if (!skipLessonNote) {
+      try {
+        const intentBody = await call(`/api/intents/${encodeURIComponent(intentId)}`, { method: "GET" });
+        const goalId = intentBody?.intent?.goalId || asked?.goalId || args.goalId || "";
+        if (goalId) {
+          const [goalBody, graphsBody] = await Promise.all([
+            call(`/api/goals/${encodeURIComponent(goalId)}`, { method: "GET" }),
+            call(`/api/intents/${encodeURIComponent(intentId)}/journey-graphs`, { method: "GET" }).catch(() => null),
+          ]);
+          const bundle = graphsBody?.bundle || {};
+          const nodeStates = bundle.nodeStates || {};
+          const goalNodes = Array.isArray(bundle.goalGraph?.nodes) ? bundle.goalGraph.nodes : [];
+          const openStudyNodeKeys = goalNodes
+            .filter((n) => {
+              const st = nodeStates[n.nodeKey]?.state;
+              const interaction = n.metadata?.interaction;
+              return (st === "AVAILABLE" || st === "IN_PROGRESS") && interaction === "STUDY";
+            })
+            .map((n) => n.nodeKey);
+          // Also honor first open node in goal order when interaction missing
+          if (!openStudyNodeKeys.length) {
+            for (const n of goalNodes) {
+              const st = nodeStates[n.nodeKey]?.state;
+              if (st === "AVAILABLE" || st === "IN_PROGRESS") {
+                openStudyNodeKeys.push(n.nodeKey);
+                break;
+              }
             }
           }
+          const frontierHint = {
+            currentNodeId:
+              goalBody?.executionState?.currentNodeId ||
+              openStudyNodeKeys[0] ||
+              null,
+            openStudyNodeKeys,
+          };
+          coachingNote = coachingNoteFromGoal(
+            goalBody,
+            args.nodeId || args.nodeKey || null,
+            frontierHint,
+          );
         }
-        const frontierHint = {
-          currentNodeId:
-            goalBody?.executionState?.currentNodeId ||
-            openStudyNodeKeys[0] ||
-            null,
-          openStudyNodeKeys,
-        };
-        coachingNote = coachingNoteFromGoal(
-          goalBody,
-          args.nodeId || args.nodeKey || null,
-          frontierHint,
-        );
+      } catch (enrichErr) {
+        // Keep Ask moving even if lesson enrich fails.
       }
-    } catch (enrichErr) {
-      // Keep Ask moving even if lesson enrich fails.
     }
     return compactJourneyMessage(asked, intentId, coachingNote);
   }

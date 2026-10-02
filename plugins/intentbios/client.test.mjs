@@ -212,12 +212,228 @@ test("status preamble is dropped when coachingNote is present", async () => {
   assert.equal(compacted.hasLessonCoaching, true);
   assert.doesNotMatch(compacted.reply, /Ask can coach this step/);
 
-  const already = compactJourneyMessage(
-    { reply: "The unit circle maps angle to cosine and sine on the axes.", coached: true, hasLessonCoaching: true },
+  const statusOnly = compactJourneyMessage({ reply: status }, "int_1", null);
+  assert.equal(statusOnly.reply, status);
+  assert.equal(statusOnly.hasLessonCoaching, false);
+
+  const ack = compactJourneyMessage(
+    { reply: "Noted. Next step is still open." },
     "int_1",
     note,
   );
-  assert.match(already.reply, /unit circle maps angle/i);
-  assert.doesNotMatch(already.reply, /Ask can coach this step/);
+  assert.equal(ack.reply, "Noted. Next step is still open.");
+  assert.doesNotMatch(ack.reply, /Lesson coaching from Intentbios/);
+});
+
+test("coached short reply is not followed by the lesson dump", async () => {
+  const { compactJourneyMessage } = await import("./client.mjs");
+  const short = "The unit circle maps angle to cosine and sine on the axes.";
+  const status =
+    "Current step is Unit circle (STUDY). This step stays with you. Ask can coach this step; it does not mark it complete. Current block: Overview.";
+  const note = [
+    "Lesson coaching from Intentbios (generatedBy=llm) for **Unit circle**:",
+    "",
+    "The full lesson markdown would be pasted here.",
+  ].join("\n");
+  const already = compactJourneyMessage(
+    { reply: short, coached: true, hasLessonCoaching: true },
+    "int_1",
+    note,
+  );
+  assert.equal(already.reply, short);
+  assert.equal(already.coached, true);
   assert.doesNotMatch(already.reply, /Lesson coaching from Intentbios/);
+
+  const withPreamble = compactJourneyMessage(
+    { reply: `${status}\n\n${short}`, coached: true, hasLessonCoaching: true },
+    "int_1",
+    note,
+  );
+  assert.equal(withPreamble.reply, short);
+  assert.doesNotMatch(withPreamble.reply, /Ask can coach this step/);
+  assert.doesNotMatch(withPreamble.reply, /Lesson coaching from Intentbios/);
+
+  const paragraphs = "First sentence about the unit circle.\n\nSecond sentence stays on its own line.";
+  const kept = compactJourneyMessage(
+    { reply: paragraphs, coached: true },
+    "int_1",
+    note,
+  );
+  assert.equal(kept.reply, paragraphs);
+});
+
+test("long coaching note clips on a sentence boundary", async () => {
+  const { clipAtSentenceBoundary, compactJourneyMessage, JOURNEY_REPLY_MAX_CHARS } = await import("./client.mjs");
+  const sentence = "The unit circle maps an angle to cosine and sine. ";
+  const note = `Lesson coaching from Intentbios (generatedBy=llm) for **Unit circle**:\n\n${sentence.repeat(40)}This tail must not survive the clip.`;
+  assert.ok(note.length > JOURNEY_REPLY_MAX_CHARS);
+
+  const clipped = clipAtSentenceBoundary(note);
+  assert.ok(clipped.length <= JOURNEY_REPLY_MAX_CHARS);
+  assert.ok(clipped.length < note.length);
+  assert.match(clipped, /\.\s*$/);
+  assert.doesNotMatch(clipped, /This tail must not survive/);
+
+  const status =
+    "Current step is Unit circle (STUDY). This step stays with you. Ask can coach this step; it does not mark it complete. Current block: Overview.";
+  const compacted = compactJourneyMessage({ reply: status }, "int_1", note);
+  assert.equal(compacted.reply, clipped);
+  assert.doesNotMatch(compacted.reply, /Ask can coach this step/);
+  assert.match(compacted.reply, /^Lesson coaching from Intentbios/);
+});
+
+test("journey_message does not append the lesson after a coached reply", async () => {
+  const seen = [];
+  const sentence = "Radians measure arc length on a circle of radius one. ";
+  const overview = sentence.repeat(40);
+  const server = await listen(async (req, res) => {
+    seen.push(req.url);
+    res.setHeader("Content-Type", "application/json");
+    if (req.url === "/api/intents/int_1/journey/message" && req.method === "POST") {
+      res.writeHead(200);
+      res.end(JSON.stringify({
+        success: true,
+        reply: "Degrees and radians name the same rotation. Multiply by π/180 to convert.",
+        coached: true,
+        hasLessonCoaching: true,
+        advanced: [],
+        goalId: "goal_1",
+      }));
+      return;
+    }
+    if (req.url === "/api/intents/int_1") {
+      res.writeHead(200);
+      res.end(JSON.stringify({ success: true, intent: { id: "int_1", goalId: "goal_1" } }));
+      return;
+    }
+    if (req.url === "/api/goals/goal_1") {
+      res.writeHead(200);
+      res.end(JSON.stringify({
+        success: true,
+        executionState: { currentNodeId: "n1" },
+        graph: {
+          id: "goal_1",
+          nodes: [{
+            id: "n1",
+            label: "Degrees and radians",
+            learningMaterial: { generatedBy: "llm", overviewMarkdown: overview, coreConcepts: [] },
+          }],
+        },
+      }));
+      return;
+    }
+    if (req.url === "/api/intents/int_1/journey-graphs") {
+      res.writeHead(200);
+      res.end(JSON.stringify({
+        success: true,
+        bundle: {
+          goalGraph: { nodes: [{ nodeKey: "n1", metadata: { interaction: "STUDY" } }] },
+          nodeStates: { n1: { state: "AVAILABLE" } },
+        },
+      }));
+      return;
+    }
+    res.writeHead(404);
+    res.end(JSON.stringify({ success: false, error: "not found" }));
+  });
+
+  try {
+    const asked = await executeIntentbiosTool(
+      "journey_message",
+      { intentId: "int_1", message: "How do I convert degrees?", userId: "grok-bot" },
+      { baseUrl: server.baseUrl },
+    );
+    assert.equal(
+      asked.reply,
+      "Degrees and radians name the same rotation. Multiply by π/180 to convert.",
+    );
+    assert.doesNotMatch(asked.reply, /Lesson coaching from Intentbios/);
+    assert.equal(seen.includes("/api/goals/goal_1"), false);
+  } finally {
+    await server.close();
+  }
+});
+
+test("status-only ask is a clipped frontier note and acknowledgements stay put", async () => {
+  const { JOURNEY_REPLY_MAX_CHARS } = await import("./client.mjs");
+  const sentence = "Radians measure arc length on a circle of radius one. ";
+  const overview = sentence.repeat(40);
+  const status =
+    "Current step is Degrees and radians (STUDY). This step stays with you. Ask can coach this step; it does not mark it complete. Current block: Overview.";
+  const server = await listen(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const raw = Buffer.concat(chunks).toString("utf8");
+    const body = raw ? JSON.parse(raw) : null;
+    res.setHeader("Content-Type", "application/json");
+    if (req.url === "/api/intents/int_1/journey/message" && req.method === "POST") {
+      const reply = body?.message === "ack" ? "Noted. Next step is still open." : status;
+      res.writeHead(200);
+      res.end(JSON.stringify({
+        success: true,
+        reply,
+        coached: false,
+        hasLessonCoaching: false,
+        goalId: "goal_1",
+      }));
+      return;
+    }
+    if (req.url === "/api/intents/int_1") {
+      res.writeHead(200);
+      res.end(JSON.stringify({ success: true, intent: { id: "int_1", goalId: "goal_1" } }));
+      return;
+    }
+    if (req.url === "/api/goals/goal_1") {
+      res.writeHead(200);
+      res.end(JSON.stringify({
+        success: true,
+        executionState: { currentNodeId: "n1" },
+        graph: {
+          id: "goal_1",
+          nodes: [{
+            id: "n1",
+            label: "Degrees and radians",
+            learningMaterial: { generatedBy: "llm", overviewMarkdown: overview, coreConcepts: [] },
+          }],
+        },
+      }));
+      return;
+    }
+    if (req.url === "/api/intents/int_1/journey-graphs") {
+      res.writeHead(200);
+      res.end(JSON.stringify({
+        success: true,
+        bundle: {
+          goalGraph: { nodes: [{ nodeKey: "n1", metadata: { interaction: "STUDY" } }] },
+          nodeStates: { n1: { state: "AVAILABLE" } },
+        },
+      }));
+      return;
+    }
+    res.writeHead(404);
+    res.end(JSON.stringify({ success: false, error: "not found" }));
+  });
+
+  try {
+    const asked = await executeIntentbiosTool(
+      "journey_message",
+      { intentId: "int_1", message: "coach this step", userId: "grok-bot" },
+      { baseUrl: server.baseUrl },
+    );
+    assert.match(asked.reply, /^Lesson coaching from Intentbios \(generatedBy=llm\)/);
+    assert.doesNotMatch(asked.reply, /Ask can coach this step/);
+    assert.ok(asked.reply.length <= JOURNEY_REPLY_MAX_CHARS);
+    assert.ok(asked.reply.length < overview.length);
+    assert.match(asked.reply, /\.$/);
+
+    const ack = await executeIntentbiosTool(
+      "journey_message",
+      { intentId: "int_1", message: "ack", userId: "grok-bot" },
+      { baseUrl: server.baseUrl },
+    );
+    assert.equal(ack.reply, "Noted. Next step is still open.");
+    assert.doesNotMatch(ack.reply, /Lesson coaching from Intentbios/);
+  } finally {
+    await server.close();
+  }
 });

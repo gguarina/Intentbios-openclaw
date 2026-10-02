@@ -62,6 +62,32 @@ function withoutNames(existing, names) {
  * Overwrites the template files so a deploy can refresh the coach prompt.
  * @param {string} workspaceDir
  */
+const bundledPluginDir = fileURLToPath(new URL("../plugins/intentbios/", import.meta.url));
+
+/**
+ * Refresh a volume copy of the intentbios plugin from the image.
+ * OpenClaw prefers /data/.openclaw/plugins/intentbios over /app/plugins/intentbios
+ * when both are configured, so a stale volume copy keeps shipping the old client.
+ * No-op when destDir does not already exist, so a fresh volume does not gain a
+ * second plugin path.
+ * @param {string} destDir
+ */
+export function syncBundledIntentbiosPlugin(destDir) {
+  if (!destDir || typeof destDir !== "string") {
+    throw new Error("syncBundledIntentbiosPlugin requires destDir");
+  }
+  if (!fs.existsSync(destDir)) return null;
+  fs.cpSync(bundledPluginDir, destDir, {
+    recursive: true,
+    force: true,
+    filter: (src) => {
+      const base = path.basename(src);
+      return base !== "node_modules" && base !== ".git";
+    },
+  });
+  return destDir;
+}
+
 export function writeCoachWorkspace(workspaceDir) {
   if (!workspaceDir || typeof workspaceDir !== "string") {
     throw new Error("writeCoachWorkspace requires workspaceDir");
