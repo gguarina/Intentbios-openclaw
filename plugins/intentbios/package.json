@@ -1,0 +1,14 @@
+{
+  "name": "openclaw-plugin-intentbios",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenClaw tools that create and advance Intentbios intents.",
+  "openclaw": {
+    "extensions": ["./index.js"],
+    "compat": {
+      "pluginApi": ">=2026.9.4",
+      "minGatewayVersion": "2026.9.4"
+    }
+  }
+}

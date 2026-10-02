@@ -13,6 +13,11 @@ import {
   describeGatewayHealth,
   isGatewayStartupReady,
 } from "./gateway-readiness.js";
+import {
+  configDeepEqual,
+  mergeIntentbiosCoachConfig,
+  writeCoachWorkspace,
+} from "./intentbios-coach-config.mjs";
 import { rebuildForwardedHeaders } from "./proxy-headers.js";
 
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
@@ -554,6 +559,69 @@ async function startGateway() {
   });
 }
 
+function intentbiosPluginPath() {
+  return path.resolve(process.cwd(), "plugins", "intentbios");
+}
+
+function intentbiosCoachWorkspaceDir() {
+  return path.join(STATE_DIR, "workspaces", "intentbios-coach");
+}
+
+function syncIntentbiosCoachConfig() {
+  const workspaceDir = intentbiosCoachWorkspaceDir();
+  try {
+    writeCoachWorkspace(workspaceDir);
+  } catch (err) {
+    log.error(
+      "intentbios",
+      `coach workspace write failed; starting gateway anyway: ${err.message}`,
+    );
+  }
+
+  const apiUrl = process.env.INTENTBIOS_API_URL?.trim() || "";
+  if (!apiUrl) {
+    log.info(
+      "intentbios",
+      "INTENTBIOS_API_URL is unset; leaving openclaw.json unchanged",
+    );
+    return;
+  }
+
+  const target = configPath();
+  try {
+    const current = JSON.parse(fs.readFileSync(target, "utf8"));
+    const merged = mergeIntentbiosCoachConfig(current, {
+      apiUrl,
+      pluginPath: intentbiosPluginPath(),
+      workspaceDir,
+      defaultUserId: process.env.INTENTBIOS_DEFAULT_USER_ID,
+    });
+    if (configDeepEqual(current, merged)) {
+      log.info("intentbios", "coach config already present");
+      return;
+    }
+    const next = `${JSON.stringify(merged, null, 2)}\n`;
+    const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
+    try {
+      fs.writeFileSync(tmp, next, { encoding: "utf8", mode: 0o600 });
+      fs.renameSync(tmp, target);
+    } catch (writeErr) {
+      try {
+        fs.rmSync(tmp, { force: true });
+      } catch {
+        // The original config is still in place.
+      }
+      throw writeErr;
+    }
+    log.info("intentbios", `merged intentbios-coach into ${target}`);
+  } catch (err) {
+    log.error(
+      "intentbios",
+      `coach config merge failed; starting gateway anyway: ${err.message}`,
+    );
+  }
+}
+
 async function ensureGatewayRunning() {
   if (!isConfigured()) return { ok: false, reason: "not configured" };
   if (gatewayProc) return { ok: true };
@@ -566,6 +634,7 @@ async function ensureGatewayRunning() {
       await syncProviderEnvSecrets();
       await syncTrustedProxies();
       await syncAllowedOrigins();
+      syncIntentbiosCoachConfig();
       await startGateway();
       const ready = await waitForGatewayReady({ timeoutMs: 60_000 });
       if (!ready) {
