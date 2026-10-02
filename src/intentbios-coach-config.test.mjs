@@ -41,7 +41,11 @@ test("enables the coach agent, plugin, and chat completions", () => {
     merged.plugins.entries.intentbios.config.apiUrl,
     "https://coachapp-production-0a92.up.railway.app",
   );
-  assert.deepEqual(merged.agents.entries[COACH_AGENT_ID].tools.allow, [...COACH_TOOL_NAMES]);
+  assert.equal(merged.agents.entries[COACH_AGENT_ID].tools.profile, "full");
+  assert.deepEqual(merged.agents.entries[COACH_AGENT_ID].tools.allow, [
+    ...COACH_TOOL_NAMES,
+    "intentbios",
+  ]);
   assert.equal(merged.agents.entries[COACH_AGENT_ID].workspace, workspaceDir);
   assert.equal(merged.agents.entries.main.default, true);
   assert.equal(merged.agents.entries.main.workspace, "/data/workspace");
@@ -97,9 +101,11 @@ test("unions tool allow lists and drops alsoAllow", () => {
   assert.deepEqual(merged.tools.deny, ["exec"]);
   assert.deepEqual(merged.plugins.allow, ["brave", "intentbios"]);
   assert.deepEqual(merged.plugins.deny, ["other"]);
+  assert.equal(merged.agents.entries[COACH_AGENT_ID].tools.profile, "full");
   assert.deepEqual(merged.agents.entries[COACH_AGENT_ID].tools.allow, [
     "message",
     ...COACH_TOOL_NAMES,
+    "intentbios",
   ]);
   assert.equal(merged.agents.entries[COACH_AGENT_ID].tools.alsoAllow, undefined);
   assert.deepEqual(merged.agents.entries[COACH_AGENT_ID].tools.deny, ["cron"]);
@@ -121,6 +127,31 @@ test("is a no-op without apiUrl and idempotent after a merge", () => {
 test("does not create a global tools allowlist", () => {
   const merged = merge({ agents: { entries: { main: { default: true } } } });
   assert.equal(merged.tools, undefined);
+  assert.equal(merged.plugins.allow, undefined);
+});
+
+test("coach profile stays full when the global profile would drop plugin tools", () => {
+  const merged = merge({
+    tools: { profile: "coding", deny: ["exec"] },
+    agents: {
+      entries: {
+        main: { default: true },
+        [COACH_AGENT_ID]: {
+          tools: { profile: "messaging", allow: ["session_status"] },
+        },
+      },
+    },
+  });
+  assert.equal(merged.tools.profile, "coding");
+  assert.deepEqual(merged.tools.deny, ["exec"]);
+  assert.equal(merged.agents.entries.main.default, true);
+  assert.equal(merged.agents.entries.main.tools, undefined);
+  assert.equal(merged.agents.entries[COACH_AGENT_ID].tools.profile, "full");
+  assert.deepEqual(merged.agents.entries[COACH_AGENT_ID].tools.allow, [
+    "session_status",
+    ...COACH_TOOL_NAMES,
+    "intentbios",
+  ]);
   assert.equal(merged.plugins.allow, undefined);
 });
 
