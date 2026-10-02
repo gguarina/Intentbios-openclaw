@@ -10,6 +10,7 @@ import {
   SOPHIA_AGENT_ID,
   configDeepEqual,
   mergeIntentbiosCoachConfig,
+  syncBundledIntentbiosPlugin,
   writeCoachWorkspace,
 } from "./intentbios-coach-config.mjs";
 
@@ -180,6 +181,20 @@ test("writeCoachWorkspace copies templates and does not add lesson content", () 
   assert.equal(fs.existsSync(path.join(dir, "lesson.md")), false);
   const names = fs.readdirSync(dir).sort();
   assert.deepEqual(names, ["AGENTS.md", "IDENTITY.md", "SOUL.md", "TOOLS.md", "USER.md"]);
+});
+
+test("syncBundledIntentbiosPlugin overwrites a stale volume client", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "intentbios-plugin-"));
+  fs.writeFileSync(path.join(dir, "client.mjs"), "export const stale = true;\n");
+  const synced = syncBundledIntentbiosPlugin(dir);
+  assert.equal(synced, dir);
+  const client = fs.readFileSync(path.join(dir, "client.mjs"), "utf8");
+  assert.match(client, /clipAtSentenceBoundary/);
+  assert.doesNotMatch(client, /export const stale/);
+  assert.equal(fs.existsSync(path.join(dir, "index.js")), true);
+  const missing = fs.mkdtempSync(path.join(os.tmpdir(), "intentbios-plugin-missing-"));
+  fs.rmSync(missing, { recursive: true });
+  assert.equal(syncBundledIntentbiosPlugin(missing), null);
 });
 
 test("manifest tools match the coach tool list", () => {

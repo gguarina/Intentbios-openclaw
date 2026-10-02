@@ -16,6 +16,7 @@ import {
 import {
   configDeepEqual,
   mergeIntentbiosCoachConfig,
+  syncBundledIntentbiosPlugin,
   writeCoachWorkspace,
 } from "./intentbios-coach-config.mjs";
 import { rebuildForwardedHeaders } from "./proxy-headers.js";
@@ -568,6 +569,19 @@ function intentbiosCoachWorkspaceDir() {
 }
 
 function syncIntentbiosCoachConfig() {
+  const volumePluginDir = path.join(STATE_DIR, "plugins", "intentbios");
+  if (fs.existsSync(volumePluginDir)) {
+    try {
+      syncBundledIntentbiosPlugin(volumePluginDir);
+      log.info("intentbios", `refreshed volume plugin at ${volumePluginDir}`);
+    } catch (err) {
+      log.error(
+        "intentbios",
+        `volume plugin refresh failed; starting gateway anyway: ${err.message}`,
+      );
+    }
+  }
+
   const workspaceDir = intentbiosCoachWorkspaceDir();
   try {
     writeCoachWorkspace(workspaceDir);
