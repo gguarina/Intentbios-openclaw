@@ -1,0 +1,33 @@
+{
+  "id": "intentbios",
+  "name": "Intentbios",
+  "description": "Create and advance Intentbios intents from the intentbios-coach agent.",
+  "categories": ["other"],
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "intent_create",
+      "journey_message",
+      "intent_execute",
+      "state_snapshot",
+      "lesson_status"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiUrl": {
+        "type": "string",
+        "description": "Base URL of the Intentbios HTTP API."
+      },
+      "defaultUserId": {
+        "type": "string",
+        "description": "User id used when a tool call does not pass userId."
+      }
+    },
+    "required": ["apiUrl"]
+  }
+}
