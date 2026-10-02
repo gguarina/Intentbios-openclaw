@@ -2,13 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import {
-  COACH_AGENT_ID,
-  COACH_TOOL_NAMES,
-  SOPHIA_AGENT_ID,
-} from "../plugins/intentbios/client.mjs";
+import { COACH_TOOL_NAMES } from "../plugins/intentbios/client.mjs";
 
-export { COACH_AGENT_ID, COACH_TOOL_NAMES, SOPHIA_AGENT_ID };
+export const COACH_AGENT_ID = "intentbios-coach";
+export const SOPHIA_AGENT_ID = "intentbios-sophia";
+export { COACH_TOOL_NAMES };
 
 const PLUGIN_ID = "intentbios";
 const COACH_NAME = "Intentbios Coach";
