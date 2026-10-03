@@ -7,7 +7,7 @@ import { executeIntentbiosTool, COACH_TOOL_NAMES } from "./client.mjs";
 const TOOLS = {
   intent_create: {
     description:
-      "Create an Intentbios intent. Sends rawInput to POST /api/intents. Does not generate lessons.",
+      "Create an Intentbios intent. Sends rawInput to POST /api/intents. Does not generate lessons. Forwards coachCard (summary, deepLink, suggestedReplies) when Intentbios sends one.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -22,7 +22,7 @@ const TOOLS = {
   },
   journey_message: {
     description:
-      "Ask on an existing intent. POST /api/intents/:id/journey/message. Journey completion rules stay inside Intentbios.",
+      "Ask on an existing intent. POST /api/intents/:id/journey/message. Journey completion rules stay inside Intentbios. Forwards coachCard (summary, deepLink, suggestedReplies) beside the short reply when Intentbios sends one.",
     parameters: {
       type: "object",
       additionalProperties: false,

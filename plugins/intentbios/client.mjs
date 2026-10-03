@@ -92,8 +92,29 @@ async function requestJson(fetchImpl, url, { method, userId, sessionKey, body })
   return json;
 }
 
+/**
+ * Intentbios coachCard whitelist: summary, deepLink, suggestedReplies.
+ * Lesson body, uiSchema, and raw HTML are not part of the card.
+ * Returns null when Intentbios omitted the card so the proxy does not invent one.
+ */
+export function coachCardFromBody(body) {
+  const card = body?.coachCard;
+  if (!card || typeof card !== "object" || Array.isArray(card)) return null;
+  const picked = {};
+  if (typeof card.summary === "string") picked.summary = card.summary;
+  if (typeof card.deepLink === "string") picked.deepLink = card.deepLink;
+  if (Array.isArray(card.suggestedReplies)) {
+    const replies = card.suggestedReplies.filter((item) => typeof item === "string");
+    if (replies.length === card.suggestedReplies.length || replies.length > 0) {
+      picked.suggestedReplies = replies;
+    }
+  }
+  if (Object.keys(picked).length === 0) return null;
+  return picked;
+}
+
 export function compactIntentCreate(body) {
-  return {
+  const compacted = {
     intentId: body?.intent?.id || null,
     goalId: body?.graph?.id || body?.intent?.goalId || null,
     outcomeId: body?.outcome?.id || null,
@@ -104,6 +125,9 @@ export function compactIntentCreate(body) {
       ? { jobId: body.generationJob.jobId, status: body.generationJob.status }
       : null,
   };
+  const coachCard = coachCardFromBody(body);
+  if (coachCard) compacted.coachCard = coachCard;
+  return compacted;
 }
 
 const ASK_STATUS_RE =
@@ -191,9 +215,16 @@ export function compactJourneyMessage(body, intentId, coachingNote, options = {}
   const intentbiosCoached = intentbiosAlreadyCoached(body);
   const raw = rawReply == null ? "" : String(rawReply);
   let reply = rawReply;
+  const replyIsCoachingText =
+    Boolean(raw.trim()) && !isAskStatusOnlyReply(raw) && !isAcknowledgementReply(raw);
+  const coachCard = coachCardFromBody(body);
+  // The reply is already coaching text, or Intentbios sent a card.
+  // Do not swap in a lesson dump or prepend the generatedBy banner.
+  if (coachCard || replyIsCoachingText) coachingNote = null;
 
-  if (isSubstantiveCoachedReply(body)) {
-    // Intentbios already returned the tutoring reply. Do not concatenate the lesson dump.
+  if (isSubstantiveCoachedReply(body) || (coachCard && replyIsCoachingText)) {
+    // Intentbios already returned the tutoring reply. Do not prepend a status banner
+    // and do not concatenate the lesson dump.
     const stripped = stripAskStatusPreamble(raw);
     reply = clipAtSentenceBoundary(stripped || raw);
   } else if (isAcknowledgementReply(raw) || (raw && isAskStatusOnlyReply(raw) && !coachingNote)) {
@@ -203,12 +234,16 @@ export function compactJourneyMessage(body, intentId, coachingNote, options = {}
     // Status preamble is dropped; the frontier note stands alone, clipped.
     reply = clipAtSentenceBoundary(coachingNote);
   } else if (raw) {
-    reply = isAskStatusOnlyReply(raw) || isAcknowledgementReply(raw)
-      ? rawReply
-      : clipAtSentenceBoundary(raw);
+    if (isAskStatusOnlyReply(raw) || isAcknowledgementReply(raw)) {
+      reply = rawReply;
+    } else {
+      // Reply is already coaching text. Do not prepend the status banner.
+      const stripped = stripAskStatusPreamble(raw);
+      reply = clipAtSentenceBoundary(stripped || raw);
+    }
   }
 
-  return {
+  const compacted = {
     intentId,
     reply,
     advanced: body?.advanced || [],
@@ -219,6 +254,8 @@ export function compactJourneyMessage(body, intentId, coachingNote, options = {}
     hasLessonCoaching: Boolean(coachingNote) || intentbiosCoached,
     coached: intentbiosCoached || Boolean(coachingNote),
   };
+  if (coachCard) compacted.coachCard = coachCard;
+  return compacted;
 }
 
 function isTeachableLesson(node) {
@@ -396,7 +433,11 @@ export async function executeIntentbiosTool(toolName, args = {}, options = {}) {
     const skipLessonNote =
       isExplicitUserAcknowledgement(message) ||
       isSubstantiveCoachedReply(asked) ||
-      isAcknowledgementReply(asked?.reply);
+      isAcknowledgementReply(asked?.reply) ||
+      Boolean(coachCardFromBody(asked)) ||
+      (Boolean(String(asked?.reply || "").trim()) &&
+        !isAskStatusOnlyReply(asked?.reply) &&
+        !isAcknowledgementReply(asked?.reply));
     if (!skipLessonNote) {
       try {
         const intentBody = await call(`/api/intents/${encodeURIComponent(intentId)}`, { method: "GET" });

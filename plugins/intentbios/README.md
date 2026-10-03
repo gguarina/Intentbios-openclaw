@@ -12,6 +12,8 @@ OpenClaw plugin `intentbios` registers five coach tools that call the Intentbios
 
 `intent_execute` requires `actionTarget`. Aliases: `clarify` → `clarifyIntent`, `lock` → `lockDecision`.
 
+`journey_message` and `intent_create` forward `coachCard` when Intentbios sends one. The card is `summary`, `deepLink`, and `suggestedReplies` only, beside the short reply. A missing card is left out. Lesson body, uiSchema, and raw HTML are not added.
+
 Lesson text is not hard-coded here. Sophia stays proposal-only inside Intentbios.
 
 Plugin config (`plugins.entries.intentbios.config`):
