@@ -425,6 +425,7 @@ test("status-only ask is a clipped frontier note and acknowledgements stay put",
     assert.ok(asked.reply.length <= JOURNEY_REPLY_MAX_CHARS);
     assert.ok(asked.reply.length < overview.length);
     assert.match(asked.reply, /\.$/);
+    assert.equal(asked.coachCard, undefined);
 
     const ack = await executeIntentbiosTool(
       "journey_message",
@@ -522,7 +523,222 @@ test("message ok keeps the status-only Intentbios reply", async () => {
     assert.equal(asked.coached, false);
     assert.equal(asked.hasLessonCoaching, false);
     assert.doesNotMatch(asked.reply, /Lesson coaching from Intentbios/);
+    assert.equal(asked.coachCard, undefined);
     assert.equal(seen.includes("/api/goals/goal_1"), false);
+  } finally {
+    await server.close();
+  }
+});
+
+test("journey message forwards coachCard and rejects a lesson dump", async () => {
+  const { compactJourneyMessage } = await import("./client.mjs");
+  const reply = "Markdown coaching for the learner question.";
+  const card = {
+    summary: "One or two sentences.",
+    deepLink:
+      "https://coachapp-production-0a92.up.railway.app/?intentId=intent_example&node=some_node",
+    suggestedReplies: ["How do I start this step?", "Give me a hint", "I finished this step"],
+  };
+  const status =
+    "Current step is Unit circle (STUDY). This step stays with you. Ask can coach this step; it does not mark it complete. Current block: Overview.";
+  const lessonDump =
+    "LESSON_DUMP_OVERVIEW_SHOULD_NOT_LEAK. The full lesson body, uiSchema, and raw HTML stay in Intentbios.";
+  const note = `Lesson coaching from Intentbios (generatedBy=llm) for **Unit circle**:\n\n${lessonDump}`;
+  const kept = compactJourneyMessage(
+    {
+      reply: `${status}\n\n${reply}`,
+      coachCard: {
+        ...card,
+        lessonBody: lessonDump,
+        uiSchema: { type: "Lesson", html: "<article>raw lesson</article>" },
+        html: "<article>raw lesson</article>",
+        overviewMarkdown: lessonDump,
+      },
+      learningMaterial: { overviewMarkdown: lessonDump },
+      uiSchema: { type: "Lesson" },
+    },
+    "intent_example",
+    note,
+  );
+  assert.equal(kept.reply, reply);
+  assert.deepEqual(kept.coachCard, card);
+  assert.doesNotMatch(kept.reply, /Lesson coaching from Intentbios/);
+  assert.doesNotMatch(kept.reply, /Ask can coach this step/);
+  assert.doesNotMatch(JSON.stringify(kept), /LESSON_DUMP_OVERVIEW_SHOULD_NOT_LEAK/);
+  assert.doesNotMatch(JSON.stringify(kept), /uiSchema/);
+  assert.doesNotMatch(JSON.stringify(kept), /<article>/);
+
+  const coachingWithoutCard = compactJourneyMessage(
+    { reply: `${status}\n\n${reply}` },
+    "intent_example",
+    note,
+  );
+  assert.equal(coachingWithoutCard.reply, reply);
+  assert.equal(coachingWithoutCard.coachCard, undefined);
+  assert.doesNotMatch(coachingWithoutCard.reply, /Lesson coaching from Intentbios/);
+
+  const omitted = compactJourneyMessage({ reply: status }, "intent_example", null);
+  assert.equal(omitted.coachCard, undefined);
+
+  const seen = [];
+  const sentence = "Radians measure arc length on a circle of radius one. ";
+  const overview = `${lessonDump} ${sentence.repeat(40)}`;
+  const server = await listen(async (req, res) => {
+    seen.push(req.url);
+    res.setHeader("Content-Type", "application/json");
+    if (req.url === "/api/intents/intent_example/journey/message" && req.method === "POST") {
+      res.writeHead(200);
+      res.end(JSON.stringify({
+        success: true,
+        intentId: "intent_example",
+        reply,
+        coachCard: {
+          ...card,
+          lessonBody: lessonDump,
+          uiSchema: { html: "<article>raw lesson</article>" },
+          html: "<article>raw lesson</article>",
+          suggestedReplies: [
+            ...card.suggestedReplies,
+            { html: "<article>raw lesson</article>" },
+          ],
+        },
+        learningMaterial: { overviewMarkdown: lessonDump, generatedBy: "llm" },
+        goalId: "goal_1",
+      }));
+      return;
+    }
+    if (req.url === "/api/intents/intent_example") {
+      res.writeHead(200);
+      res.end(JSON.stringify({ success: true, intent: { id: "intent_example", goalId: "goal_1" } }));
+      return;
+    }
+    if (req.url === "/api/goals/goal_1") {
+      res.writeHead(200);
+      res.end(JSON.stringify({
+        success: true,
+        executionState: { currentNodeId: "n1" },
+        graph: {
+          id: "goal_1",
+          nodes: [{
+            id: "n1",
+            label: "Unit circle",
+            learningMaterial: {
+              generatedBy: "llm",
+              overviewMarkdown: overview,
+              coreConcepts: [{ title: "Dump", explanation: lessonDump }],
+            },
+          }],
+        },
+      }));
+      return;
+    }
+    res.writeHead(404);
+    res.end(JSON.stringify({ success: false, error: "not found" }));
+  });
+
+  try {
+    const asked = await executeIntentbiosTool(
+      "journey_message",
+      { intentId: "intent_example", message: "How do I start this step?", userId: "grok-bot" },
+      { baseUrl: server.baseUrl },
+    );
+    assert.equal(asked.reply, reply);
+    assert.deepEqual(asked.coachCard, card);
+    assert.equal(asked.intentId, "intent_example");
+    assert.doesNotMatch(asked.reply, /Lesson coaching from Intentbios/);
+    assert.doesNotMatch(JSON.stringify(asked), /LESSON_DUMP_OVERVIEW_SHOULD_NOT_LEAK/);
+    assert.doesNotMatch(JSON.stringify(asked), /uiSchema/);
+    assert.doesNotMatch(JSON.stringify(asked), /<article>/);
+    assert.equal(seen.includes("/api/goals/goal_1"), false);
+  } finally {
+    await server.close();
+  }
+});
+
+test("intent create forwards coachCard and does not invent one", async () => {
+  const { compactIntentCreate } = await import("./client.mjs");
+  const card = {
+    summary: "One or two sentences.",
+    deepLink:
+      "https://coachapp-production-0a92.up.railway.app/?intentId=intent_example&node=some_node",
+    suggestedReplies: ["How do I start this step?", "Give me a hint", "I finished this step"],
+  };
+  const lessonDump = "LESSON_DUMP_OVERVIEW_SHOULD_NOT_LEAK";
+  const withCard = compactIntentCreate({
+    intent: { id: "intent_example", goalId: "goal_1" },
+    graph: { id: "goal_1" },
+    source: "catalog",
+    coachCard: {
+      ...card,
+      lessonBody: lessonDump,
+      uiSchema: { type: "Lesson" },
+      html: "<article>raw lesson</article>",
+    },
+    learningMaterial: { overviewMarkdown: lessonDump },
+  });
+  assert.equal(withCard.intentId, "intent_example");
+  assert.deepEqual(withCard.coachCard, card);
+  assert.doesNotMatch(JSON.stringify(withCard), /LESSON_DUMP_OVERVIEW_SHOULD_NOT_LEAK/);
+  assert.doesNotMatch(JSON.stringify(withCard), /uiSchema/);
+  assert.doesNotMatch(JSON.stringify(withCard), /<article>/);
+
+  const withoutCard = compactIntentCreate({
+    intent: { id: "intent_example" },
+    graph: { id: "goal_1" },
+    learningMaterial: { overviewMarkdown: lessonDump },
+  });
+  assert.equal(withoutCard.coachCard, undefined);
+  assert.doesNotMatch(JSON.stringify(withoutCard), /LESSON_DUMP_OVERVIEW_SHOULD_NOT_LEAK/);
+
+  const server = await listen(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const raw = Buffer.concat(chunks).toString("utf8");
+    const body = raw ? JSON.parse(raw) : {};
+    res.setHeader("Content-Type", "application/json");
+    if (req.url === "/api/intents" && req.method === "POST") {
+      const payload = {
+        success: true,
+        intent: { id: "intent_example", goalId: "goal_1" },
+        graph: { id: "goal_1" },
+        source: "catalog",
+      };
+      if (body.rawInput === "with card") {
+        payload.coachCard = {
+          ...card,
+          lessonBody: lessonDump,
+          uiSchema: { html: "<article>raw lesson</article>" },
+          html: "<article>raw lesson</article>",
+        };
+        payload.reply = "Markdown coaching for the learner question.";
+      }
+      res.writeHead(201);
+      res.end(JSON.stringify(payload));
+      return;
+    }
+    res.writeHead(404);
+    res.end(JSON.stringify({ success: false, error: "not found" }));
+  });
+
+  try {
+    const created = await executeIntentbiosTool(
+      "intent_create",
+      { rawInput: "with card", userId: "grok-bot" },
+      { baseUrl: server.baseUrl },
+    );
+    assert.deepEqual(created.coachCard, card);
+    assert.equal(created.intentId, "intent_example");
+    assert.doesNotMatch(JSON.stringify(created), /LESSON_DUMP_OVERVIEW_SHOULD_NOT_LEAK/);
+    assert.doesNotMatch(JSON.stringify(created), /uiSchema/);
+    assert.doesNotMatch(JSON.stringify(created), /<article>/);
+
+    const plain = await executeIntentbiosTool(
+      "intent_create",
+      { rawInput: "no card", userId: "grok-bot" },
+      { baseUrl: server.baseUrl },
+    );
+    assert.equal(plain.coachCard, undefined);
+    assert.equal(plain.intentId, "intent_example");
   } finally {
     await server.close();
   }
