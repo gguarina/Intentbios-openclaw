@@ -1,0 +1,14 @@
+{
+  "name": "openclaw-plugin-ash-book",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenClaw tools for The Ash Cycle: read the trilogy repo, run locks and builds via book-runner, post PDFs to Discord.",
+  "openclaw": {
+    "extensions": ["./index.js"],
+    "compat": {
+      "pluginApi": ">=2026.9.4",
+      "minGatewayVersion": "2026.9.4"
+    }
+  }
+}

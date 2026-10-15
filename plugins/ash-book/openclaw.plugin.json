@@ -1,0 +1,20 @@
+{
+  "id": "ash-book",
+  "name": "Ash Book",
+  "description": "Read-only trilogy tools (chapters, grep, bible) plus locks and PDF builds through the book-runner service.",
+  "categories": ["other"],
+  "activation": { "onStartup": true },
+  "contracts": {
+    "tools": ["book_status", "book_locks", "book_build", "book_file", "book_chapters", "book_chapter", "book_grep"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "runnerUrl": { "type": "string", "description": "Base URL of book-runner." },
+      "buildsChannelId": { "type": "string", "description": "Discord channel id for #ash-builds." },
+      "defaultBranch": { "type": "string", "description": "Branch used when a tool call omits one." }
+    },
+    "required": ["runnerUrl"]
+  }
+}
