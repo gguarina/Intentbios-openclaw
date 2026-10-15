@@ -77,3 +77,17 @@ test("adds MCP Authorization header by env reference only", () => {
   const off = mergeIntentbiosMcp(out, { INTENTBIOS_API_URL: "https://c.example" });
   assert.equal(off.mcp.servers.intentbios.headers.Authorization, undefined);
 });
+
+import { upsertKnowledgeBlock, writeKnowledge } from "./discord-coding-config.mjs";
+test("knowledge block upsert keeps user text and is idempotent", () => {
+  const once = upsertKnowledgeBlock("# Mine\nkeep me\n", "A");
+  assert.ok(once.startsWith("# Mine\nkeep me"));
+  const twice = upsertKnowledgeBlock(once, "B");
+  assert.ok(twice.includes("B") && !twice.includes("\nA\n") && twice.includes("keep me"));
+  assert.equal(upsertKnowledgeBlock(twice, "B"), twice);
+});
+test("writeKnowledge creates AGENTS.md", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kn-"));
+  const f = writeKnowledge(dir);
+  assert.match(fs.readFileSync(f, "utf8"), /intent_muz6fi39_0m1qa2/);
+});
