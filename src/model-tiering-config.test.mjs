@@ -24,7 +24,7 @@ test("tiers agents, defaults and planner", () => {
   assert.deepEqual([e.planner.model, e.planner.thinkingDefault, e.planner.workspace], [PRO, "medium", "/data/workspace"]);
   assert.deepEqual(e.main.subagents.allowAgents, ["intentbios-coach", "planner"]);
   assert.equal(e["intentbios-coach"].thinkingDefault, "off");
-  assert.equal(e["ash-editor"].model, PRO);
+  assert.deepEqual([e["ash-editor"].model, e["ash-editor"].thinkingDefault], [PRO, "high"]);
   assert.deepEqual([e["ash-coldreader"].model, e["ash-continuity"].thinkingDefault], [FLASH, "off"]);
   assert.equal(e["intentbios-sophia"], c.agents.entries["intentbios-sophia"]);
   assert.deepEqual(d.model, { primary: FLASH, fallbacks: [] });

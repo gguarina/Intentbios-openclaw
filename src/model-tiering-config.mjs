@@ -13,7 +13,7 @@ export const AGENT_TIERS = {
   main: { model: FLASH, thinkingDefault: "low" },
   [PLANNER_AGENT_ID]: { model: PRO, thinkingDefault: "medium" },
   "intentbios-coach": { model: FLASH, thinkingDefault: "off" },
-  "ash-editor": { model: PRO },
+  "ash-editor": { model: PRO, thinkingDefault: "high" }, // unchanged from before tiering (was the inherited default)
   "ash-coldreader": { model: FLASH, thinkingDefault: "off" },
   "ash-continuity": { model: FLASH, thinkingDefault: "off" },
 };
