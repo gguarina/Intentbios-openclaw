@@ -128,11 +128,18 @@ export function mergeIntentbiosMcp(config, env = process.env) {
   const mcp = isPlainObject(config.mcp) ? { ...config.mcp } : {};
   const servers = isPlainObject(mcp.servers) ? { ...mcp.servers } : {};
   const current = isPlainObject(servers.intentbios) ? servers.intentbios : {};
+  const headers = { ...(isPlainObject(current.headers) ? current.headers : {}), "x-user-id": userId };
+  // Key referenced by env var name only; OpenClaw expands ${VAR} in config strings at load.
+  if (String(env.INTENTBIOS_MCP_API_KEY || "").trim()) {
+    headers.Authorization = "Bearer ${INTENTBIOS_MCP_API_KEY}";
+  } else {
+    delete headers.Authorization;
+  }
   servers.intentbios = {
     ...current,
     url,
     transport: "streamable-http",
-    headers: { ...(isPlainObject(current.headers) ? current.headers : {}), "x-user-id": userId },
+    headers,
     connectionTimeoutMs: current.connectionTimeoutMs ?? 15000,
     requestTimeoutMs: current.requestTimeoutMs ?? 120000,
   };

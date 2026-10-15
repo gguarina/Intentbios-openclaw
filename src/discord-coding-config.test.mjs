@@ -69,3 +69,11 @@ test("registers intentbios MCP server", () => {
   assert.deepEqual(mergeIntentbiosMcp(out, { INTENTBIOS_API_URL: "https://coach.example/" }), out);
   assert.deepEqual(mergeIntentbiosMcp({ a: 1 }, {}), { a: 1 });
 });
+
+test("adds MCP Authorization header by env reference only", () => {
+  const out = mergeIntentbiosMcp({}, { INTENTBIOS_API_URL: "https://c.example", INTENTBIOS_MCP_API_KEY: "secret-value" });
+  assert.equal(out.mcp.servers.intentbios.headers.Authorization, "Bearer ${INTENTBIOS_MCP_API_KEY}");
+  assert.ok(!JSON.stringify(out).includes("secret-value"));
+  const off = mergeIntentbiosMcp(out, { INTENTBIOS_API_URL: "https://c.example" });
+  assert.equal(off.mcp.servers.intentbios.headers.Authorization, undefined);
+});
