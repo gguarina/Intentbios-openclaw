@@ -20,6 +20,7 @@ import {
   writeCoachWorkspace,
 } from "./intentbios-coach-config.mjs";
 import { rebuildForwardedHeaders } from "./proxy-headers.js";
+import { mergeDiscordConfig, writeCodingSkills } from "./discord-coding-config.mjs";
 
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
 const STATE_DIR =
@@ -264,7 +265,7 @@ async function syncAllowedOrigins() {
   }
 }
 
-const PROVIDER_ENV_KEYS = ["BRAVE_API_KEY", "DEEPSEEK_API_KEY"];
+const PROVIDER_ENV_KEYS = ["BRAVE_API_KEY", "DEEPSEEK_API_KEY", "DISCORD_BOT_TOKEN"];
 
 /** Mirror Railway/provider secrets into OpenClaw's trusted runtime dotenv + config. */
 async function syncProviderEnvSecrets() {
@@ -636,6 +637,126 @@ function syncIntentbiosCoachConfig() {
   }
 }
 
+function readConfigJson() {
+  return JSON.parse(fs.readFileSync(configPath(), "utf8"));
+}
+
+function writeConfigJson(obj) {
+  const target = configPath();
+  const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    fs.writeFileSync(tmp, `${JSON.stringify(obj, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(tmp, target);
+  } catch (err) {
+    try { fs.rmSync(tmp, { force: true }); } catch {}
+    throw err;
+  }
+}
+
+function mainWorkspaceDir(config) {
+  const fromConfig = config?.agents?.defaults?.workspace;
+  return typeof fromConfig === "string" && fromConfig.trim() ? fromConfig.trim() : WORKSPACE_DIR;
+}
+
+/** Discord channel (plugin + config) and coding skill. Never throws: boot must continue. */
+async function syncDiscordAndCoding() {
+  if (!isConfigured()) return;
+  if (process.env.DISCORD_BOT_TOKEN?.trim()) {
+    try {
+      const inspect = await runCmd(OPENCLAW_NODE, clawArgs(["plugins", "inspect", "discord", "--json"]));
+      if (inspect.code !== 0) {
+        const version = (await getOpenclawInfo()).version?.match(/\d{4}\.\d+\.\d+/)?.[0];
+        const spec = version ? `@openclaw/discord@${version}` : "@openclaw/discord";
+        log.info("discord", `installing plugin ${spec}`);
+        const install = await runCmd(OPENCLAW_NODE, clawArgs(["plugins", "install", spec, "--pin"]));
+        log.info("discord", `plugin install exit=${install.code}`);
+        if (install.code !== 0) log.warn("discord", stripAnsi(install.output || "").slice(-800));
+      } else {
+        log.info("discord", "plugin already installed");
+      }
+    } catch (err) {
+      log.error("discord", `plugin install failed: ${err.message}`);
+    }
+    try {
+      const current = readConfigJson();
+      const merged = mergeDiscordConfig(current, process.env);
+      if (!configDeepEqual(current, merged)) {
+        writeConfigJson(merged);
+        log.info("discord", "channels.discord enabled (token from env DISCORD_BOT_TOKEN)");
+      }
+      const d = merged.channels?.discord || {};
+      log.info("discord", `dmPolicy=${d.dmPolicy} groupPolicy=${d.groupPolicy} guilds=${Object.keys(d.guilds || {}).length}`);
+    } catch (err) {
+      log.error("discord", `config merge failed: ${err.message}`);
+    }
+  }
+
+  let workspace = WORKSPACE_DIR;
+  try {
+    workspace = mainWorkspaceDir(readConfigJson());
+    log.info("coding", `tools.profile=${readConfigJson().tools?.profile ?? "(unset=full)"}`);
+    writeCodingSkills(workspace);
+    log.info("coding", `wrote coding skill to ${workspace}/skills`);
+  } catch (err) {
+    log.error("coding", `skill write failed: ${err.message}`);
+  }
+  setupGitWorkspace(workspace).catch((err) =>
+    log.error("coding", `git workspace setup failed: ${err.message}`),
+  );
+}
+
+function runPlain(cmd, args, env, input) {
+  return new Promise((resolve) => {
+    const proc = childProcess.spawn(cmd, args, { env, stdio: ["pipe", "pipe", "pipe"] });
+    let out = "";
+    proc.stdout.on("data", (d) => { out += d; });
+    proc.stderr.on("data", (d) => { out += d; });
+    proc.on("error", (err) => resolve({ code: 127, output: String(err) }));
+    proc.on("close", (code) => resolve({ code: code ?? 0, output: out }));
+    proc.stdin.end(input || "");
+  });
+}
+
+/** gh/git auth from GH_TOKEN and a checkout of gguarina/intentbios. Runs in the background. */
+async function setupGitWorkspace(workspace) {
+  const token = (process.env.GH_TOKEN || process.env.GITHUB_TOKEN || "").trim();
+  const ver = await runCmd("bash", ["-lc", "git --version; gh --version | head -1"]);
+  log.info("coding", stripAnsi(ver.output || "").trim().replace(/\n/g, " | "));
+  if (!token) {
+    log.warn("coding", "GH_TOKEN unset; skipping gh auth and repo checkout");
+    return;
+  }
+  const childEnv = { ...process.env };
+  delete childEnv.GH_TOKEN;
+  delete childEnv.GITHUB_TOKEN;
+  const login = await runPlain("gh", ["auth", "login", "--hostname", "github.com", "--with-token"], childEnv, `${token}\n`);
+  log.info("coding", `gh auth login exit=${login.code}`);
+  const setupGit = await runPlain("gh", ["auth", "setup-git"], childEnv);
+  log.info("coding", `gh auth setup-git exit=${setupGit.code}`);
+  const who = await runCmd("bash", ["-lc", "gh api user --jq '.login + \" \" + (.id|tostring)'"]);
+  const [ghLogin, ghId] = stripAnsi(who.output || "").trim().split(/\s+/);
+  if (ghLogin && /^\d+$/.test(ghId || "")) {
+    await runCmd("git", ["config", "--global", "user.name", "OpenClaw (via " + ghLogin + ")"]);
+    await runCmd("git", ["config", "--global", "user.email", `${ghId}+${ghLogin}@users.noreply.github.com`]);
+    log.info("coding", `gh authenticated as ${ghLogin}`);
+  } else {
+    log.warn("coding", "gh api user failed; git identity not set");
+  }
+  const reposDir = path.join(workspace, "repos");
+  const repoDir = path.join(reposDir, "intentbios");
+  fs.mkdirSync(reposDir, { recursive: true });
+  if (fs.existsSync(path.join(repoDir, ".git"))) {
+    const fetch = await runCmd("git", ["-C", repoDir, "fetch", "--prune", "origin"]);
+    log.info("coding", `repos/intentbios exists; fetch exit=${fetch.code}`);
+  } else {
+    const clone = await runCmd("gh", ["repo", "clone", "gguarina/intentbios", repoDir]);
+    log.info("coding", `cloned gguarina/intentbios exit=${clone.code}`);
+    if (clone.code !== 0) log.warn("coding", stripAnsi(clone.output || "").slice(-400));
+  }
+  const head = await runCmd("git", ["-C", repoDir, "log", "-1", "--format=%h %s"]);
+  log.info("coding", `repos/intentbios HEAD: ${stripAnsi(head.output || "").trim()}`);
+}
+
 async function ensureGatewayRunning() {
   if (!isConfigured()) return { ok: false, reason: "not configured" };
   if (gatewayProc) return { ok: true };
@@ -648,6 +769,7 @@ async function ensureGatewayRunning() {
       await syncProviderEnvSecrets();
       await syncTrustedProxies();
       await syncAllowedOrigins();
+      await syncDiscordAndCoding();
       syncIntentbiosCoachConfig();
       await startGateway();
       const ready = await waitForGatewayReady({ timeoutMs: 60_000 });
