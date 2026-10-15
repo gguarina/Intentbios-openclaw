@@ -148,7 +148,8 @@ function ensureCoachAgent(agents, workspaceDir) {
   if (generalId) {
     const general = isPlainObject(seeded[generalId]) ? { ...seeded[generalId] } : {};
     const gTools = isPlainObject(general.tools) ? { ...general.tools } : {};
-    const extra = [...COACH_TOOL_NAMES, PLUGIN_ID];
+    // `message` lets main post to Discord threads/channels (the coding profile omits it).
+    const extra = [...COACH_TOOL_NAMES, PLUGIN_ID, "message"];
     if (Array.isArray(gTools.allow)) {
       gTools.allow = unionAllow(gTools.allow, extra);
     } else {

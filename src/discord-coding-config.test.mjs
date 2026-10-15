@@ -32,7 +32,9 @@ test("tightens open policies and applies user/guild allowlists", () => {
   assert.deepEqual(d.allowFrom, ["123456789012345678"]);
   assert.equal(d.dm.policy, "allowlist");
   assert.equal(d.groupPolicy, "allowlist");
-  assert.deepEqual(d.guilds["223456789012345678"], { requireMention: true, users: ["123456789012345678"] });
+  assert.deepEqual(d.guilds["223456789012345678"], { requireMention: false, users: ["123456789012345678"] });
+  const g = mergeDiscordConfig({}, { DISCORD_BOT_TOKEN: "x", DISCORD_GUILD_ID: "223456789012345678" }).channels.discord.guilds["223456789012345678"];
+  assert.deepEqual(g, { requireMention: true });
 });
 
 test("is idempotent", () => {
