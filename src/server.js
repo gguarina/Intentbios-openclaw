@@ -21,6 +21,7 @@ import {
 } from "./intentbios-coach-config.mjs";
 import { rebuildForwardedHeaders } from "./proxy-headers.js";
 import { mergeDiscordConfig, mergeIntentbiosMcp, writeCodingSkills, writeKnowledge } from "./discord-coding-config.mjs";
+import { mergeModelTiering, describeTiers } from "./model-tiering-config.mjs";
 import { mergeAshBookConfig, syncAshKnowledge, writeAshWorkspaces } from "./ash-book-config.mjs";
 
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
@@ -670,6 +671,27 @@ async function syncAshBook() {
   }
 }
 
+/** Cost tiering: per-agent / subagent / heartbeat / compaction models. Runs last. Never throws. */
+function syncModelTiering() {
+  if (!isConfigured()) return;
+  try {
+    const current = readConfigJson();
+    const merged = mergeModelTiering(current, { mainWorkspace: WORKSPACE_DIR });
+    if (!configDeepEqual(current, merged)) {
+      const backup = `${configPath()}.bak-tiers-${Date.now()}`;
+      fs.copyFileSync(configPath(), backup);
+      fs.chmodSync(backup, 0o600);
+      writeConfigJson(merged);
+      log.info("tiers", `merged model tiering (backup ${backup})`);
+    } else {
+      log.info("tiers", "model tiering already present");
+    }
+    log.info("tiers", describeTiers(merged));
+  } catch (err) {
+    log.error("tiers", `model tiering merge failed; starting gateway anyway: ${err.message}`);
+  }
+}
+
 function readConfigJson() {
   return JSON.parse(fs.readFileSync(configPath(), "utf8"));
 }
@@ -886,6 +908,7 @@ async function ensureGatewayRunning() {
       await syncRailwayAuth();
       syncIntentbiosCoachConfig();
       await syncAshBook();
+      syncModelTiering();
       await startGateway();
       const ready = await waitForGatewayReady({ timeoutMs: 60_000 });
       if (!ready) {
