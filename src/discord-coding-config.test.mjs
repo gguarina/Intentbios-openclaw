@@ -46,3 +46,15 @@ test("writes coding skill into workspace", () => {
   writeCodingSkills(dir);
   assert.ok(fs.existsSync(path.join(dir, "skills", "github-coding", "SKILL.md")));
 });
+
+test("binds discord:default to main when multiple agents exist", () => {
+  const cfg = { agents: { entries: { main: { default: true }, "intentbios-coach": {}, "intentbios-sophia": {} } } };
+  const out = mergeDiscordConfig(cfg, { DISCORD_BOT_TOKEN: "x" });
+  assert.deepEqual(out.bindings, [{ agentId: "main", match: { channel: "discord", accountId: "default" } }]);
+  assert.deepEqual(mergeDiscordConfig(out, { DISCORD_BOT_TOKEN: "x" }).bindings, out.bindings);
+});
+
+test("keeps an existing discord binding", () => {
+  const cfg = { bindings: [{ agentId: "x", match: { channel: "discord" } }] };
+  assert.deepEqual(mergeDiscordConfig(cfg, { DISCORD_BOT_TOKEN: "x" }).bindings, cfg.bindings);
+});

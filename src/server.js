@@ -685,6 +685,7 @@ async function syncDiscordAndCoding() {
         log.info("discord", "channels.discord enabled (token from env DISCORD_BOT_TOKEN)");
       }
       const d = merged.channels?.discord || {};
+      log.info("discord", `agentIds=${Object.keys(merged.agents?.entries || {}).join(",")} binding=${JSON.stringify((merged.bindings || []).filter((b) => b?.match?.channel === "discord"))}`);
       log.info("discord", `dmPolicy=${d.dmPolicy} groupPolicy=${d.groupPolicy} guilds=${Object.keys(d.guilds || {}).length}`);
     } catch (err) {
       log.error("discord", `config merge failed: ${err.message}`);
