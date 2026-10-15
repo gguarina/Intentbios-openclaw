@@ -727,6 +727,12 @@ async function ensureEvals() {
     const b = await runCmd(process.execPath, [path.join(EVALS_DIR_APP, "coach-golden.mjs"), "--baseline"], { cwd: EVALS_DIR_APP });
     log.info("evals", `baseline exit=${b.code}\n${b.output.slice(-3000)}`);
   }
+  let seeded = false;
+  try { seeded = Boolean(JSON.parse(fs.readFileSync(path.join(evalDir, "bugs.json"), "utf8")).__seeded); } catch { seeded = false; }
+  if (!seeded) {
+    const sb = await runCmd(process.execPath, [path.join(EVALS_DIR_APP, "seed-bugs.mjs")], { cwd: EVALS_DIR_APP });
+    log.info("evals", `seed bugs exit=${sb.code} ${sb.output.slice(-800)}`);
+  }
 }
 
 function readConfigJson() {
