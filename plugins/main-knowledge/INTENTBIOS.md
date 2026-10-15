@@ -36,7 +36,32 @@ Intake with examples → search **every** site the lesson names → show a table
 - Test users: `gustavo` (real intents), `grok-coach`, `guest_*`. Use a fresh `guest_<topic>` id for experiments; do not mutate Gustavo's intents unless asked.
 - Secrets live only in env vars (GH_TOKEN, RAILWAY_API_TOKEN, INTENTBIOS_MCP_API_KEY, OPENCLAW_GATEWAY_TOKEN). Never print them.
 
-### 6. How to work
+### 6. Gustavo's preferences and history
+**About him:** lives in Germany (Europe/Berlin), married, one child about 4 years old. Mainly wants help with work projects on GitHub and in code. Hands-off: ship unless it's risky.
+
+**Coach and lesson rules (in addition to section 1–2):**
+- How-to and coach notes from the open lesson must say which **existing** skill will be used, what information it needs, what the lesson already provides, and what is still needed from the user. Never invent a new skill and never leave the open step.
+- Skill notes explain **how** to use the skill, not just its name. Apartment search example: which websites, which parameters, what to look for, how often to re-run it.
+- The coach is a fluent guide that runs skills on its own: when the lesson already has what a skill needs, run it and talk the user through it — don't wait for a command.
+- App Ask and the chat coach look the same: short summary + deep link to the step + suggested replies. No lesson dump.
+- Lessons: never fall back to hard-coded content. Keep retrying/repairing with the LLM, with an adaptive per-lesson timeout, until a valid lesson exists (or fail honestly).
+- The polymorphic UI is coached as a short summary + deep link, in Markdown and choice cards — never raw HTML or full schemas. Coach cards name steps without giving away answers.
+- Search, compare, apartment search and page read **never** finish a step.
+- Excluded from autonomy: voice, email sending, buying, booking.
+- Coaching sessions are live product QA: spot failures while he interacts, then propose concrete fix plans.
+
+**History:**
+- Chat is the coach; the Intentbios app is the study surface. One shared intent record between chat and app; Google sign-in is matched to the bot-created intent.
+- Algebra journey `intent_murygox7_oksoll`: first step was coached as "2n+3".
+- Shipped earlier: open steps show before lessons finish; `coach_act` (one sentence can finish, draft, choose or schedule); "I'm stuck" replans the journey.
+- Postgres watch: weekday checks at 9:45 and 15:45 Berlin, alert near 70% of the 5 GB Hobby volume. Never upgrade.
+
+### 7. Memory (keep learning)
+- Your workspace is on the persistent `/data` volume. Use OpenClaw memory: write dated notes to `memory/YYYY-MM-DD.md` (what you did, what broke, decisions, Gustavo's new preferences) and keep `MEMORY.md` as a short curated list of durable facts and decisions. Search them with `memory_search` / `memory_get` before answering about past work.
+- When Gustavo states a preference or corrects you, write it to `MEMORY.md` the same turn.
+- Do not edit this managed block in `AGENTS.md` (it is overwritten on boot); to change it, open a PR on `gguarina/Intentbios-openclaw` (`plugins/main-knowledge/INTENTBIOS.md`). No secrets in memory files.
+
+### 8. How to work
 1. Reproduce live (curl/tools against production with a test user), read the code in `repos/intentbios`.
 2. Branch → fix → `npm test` (the full suite; `tsc --noEmit` has ~69 pre-existing errors, do not add new ones) → PR with what/why/how tested → squash-merge when clean.
 3. Wait for the Railway deploy (deployment list → SUCCESS for the merge SHA).

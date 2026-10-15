@@ -676,6 +676,20 @@ function syncGatewayAuthToken() {
   }
 }
 
+/** mcp.servers.intentbios (URL, x-user-id, Authorization by env reference). Never throws. */
+function syncIntentbiosMcpConfig() {
+  if (!isConfigured()) return;
+  try {
+    const current = readConfigJson();
+    const merged = mergeIntentbiosMcp(current, process.env);
+    if (!configDeepEqual(current, merged)) writeConfigJson(merged);
+    const srv = merged.mcp?.servers?.intentbios;
+    log.info("mcp", srv ? `intentbios MCP: ${srv.url} x-user-id=${srv.headers?.["x-user-id"]} auth=${srv.headers?.Authorization ? "env" : "none"}` : "intentbios MCP not configured");
+  } catch (err) {
+    log.error("mcp", `intentbios MCP merge failed: ${err.message}`);
+  }
+}
+
 /** Discord channel (plugin + config) and coding skill. Never throws: boot must continue. */
 async function syncDiscordAndCoding() {
   if (!isConfigured()) return;
@@ -710,15 +724,7 @@ async function syncDiscordAndCoding() {
     }
   }
 
-  try {
-    const current = readConfigJson();
-    const merged = mergeIntentbiosMcp(current, process.env);
-    if (!configDeepEqual(current, merged)) writeConfigJson(merged);
-    const srv = merged.mcp?.servers?.intentbios;
-    log.info("mcp", srv ? `intentbios MCP: ${srv.url} x-user-id=${srv.headers?.["x-user-id"]}` : "intentbios MCP not configured");
-  } catch (err) {
-    log.error("mcp", `intentbios MCP merge failed: ${err.message}`);
-  }
+  syncIntentbiosMcpConfig();
 
   let workspace = WORKSPACE_DIR;
   try {
@@ -727,6 +733,7 @@ async function syncDiscordAndCoding() {
     writeCodingSkills(workspace);
     log.info("coding", `wrote coding skill to ${workspace}/skills`);
     log.info("knowledge", `wrote Intentbios knowledge block to ${writeKnowledge(workspace)}`);
+    fs.mkdirSync(path.join(workspace, "memory"), { recursive: true });
   } catch (err) {
     log.error("coding", `skill write failed: ${err.message}`);
   }
@@ -2240,6 +2247,8 @@ const server = app.listen(PORT, () => {
   if (isConfigured()) {
     (async () => {
       try {
+        // Before doctor: its MCP probe must already see the Authorization header.
+        syncIntentbiosMcpConfig();
         log.info("wrapper", "running openclaw doctor --fix...");
         const dr = await runCmd(OPENCLAW_NODE, clawArgs(["doctor", "--fix"]));
         log.info("wrapper", `doctor --fix exit=${dr.code}`);
