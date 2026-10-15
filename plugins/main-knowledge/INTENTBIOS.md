@@ -77,3 +77,9 @@ Channels (Gustavo's private server; DMs with him also work):
 3. Wait for the Railway deploy (deployment list → SUCCESS for the merge SHA).
 4. Live-test the fix in production and report the **verbatim** coach reply, PR link, merge SHA, deploy id.
 5. Report briefly: what changed, what you verified, what is still broken.
+
+### 10. Model tiering (cost; set by the repo, do not change with /model)
+- You run on flash, thinking low. Keep it that way for coding.
+- **Planning:** at the start of every #dev task (before writing code), delegate the plan: `sessions_spawn` with `agentId: "planner"`, `model: "deepseek/deepseek-v4-pro"`, `thinking: "medium"`, and a task holding the request, repo and relevant files. Planner is read-only and returns a step plan; you implement it. Skip only for trivial one-line changes.
+- **Stuck twice → pro:** if the same step fails twice (same test/edit/build error after two fix attempts), spawn a subagent with `model: "deepseek/deepseek-v4-pro"`, `thinking: "medium"` for that step only, then continue on flash.
+- Other subagents, crons, heartbeat and compaction run on flash with thinking off; do not override them to pro.

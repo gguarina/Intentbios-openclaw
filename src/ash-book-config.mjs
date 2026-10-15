@@ -20,7 +20,7 @@ export const ASH_AGENTS = {
   },
   "ash-coldreader": {
     name: "Ash Cold Reader",
-    model: "deepseek/deepseek-v4-pro",
+    model: "deepseek/deepseek-v4-flash",
     tools: ["book_chapters", "book_chapter"],
     knowledge: false,
   },
