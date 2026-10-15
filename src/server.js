@@ -21,6 +21,7 @@ import {
 } from "./intentbios-coach-config.mjs";
 import { rebuildForwardedHeaders } from "./proxy-headers.js";
 import { mergeDiscordConfig, mergeIntentbiosMcp, writeCodingSkills, writeKnowledge } from "./discord-coding-config.mjs";
+import { mergeAshBookConfig, syncAshKnowledge, writeAshWorkspaces } from "./ash-book-config.mjs";
 
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
 const STATE_DIR =
@@ -265,7 +266,7 @@ async function syncAllowedOrigins() {
   }
 }
 
-const PROVIDER_ENV_KEYS = ["BRAVE_API_KEY", "DEEPSEEK_API_KEY", "DISCORD_BOT_TOKEN"];
+const PROVIDER_ENV_KEYS = ["BRAVE_API_KEY", "DEEPSEEK_API_KEY", "DISCORD_BOT_TOKEN", "ASH_DISCORD_BOT_TOKEN", "BOOK_RUNNER_TOKEN"];
 
 /** Mirror Railway/provider secrets into OpenClaw's trusted runtime dotenv + config. */
 async function syncProviderEnvSecrets() {
@@ -637,6 +638,38 @@ function syncIntentbiosCoachConfig() {
   }
 }
 
+/** The Ash Cycle book framework: Ash bot account, ash-* agents, ash-book plugin. Never throws. */
+async function syncAshBook() {
+  if (!isConfigured() || !process.env.ASH_DISCORD_BOT_TOKEN?.trim()) return;
+  try {
+    writeAshWorkspaces(STATE_DIR);
+  } catch (err) {
+    log.error("ash", `workspace write failed: ${err.message}`);
+  }
+  try {
+    const k = await syncAshKnowledge(STATE_DIR, process.env);
+    log.info("ash", k.ok ? `knowledge refreshed (${k.written.length} files)` : `knowledge not refreshed: ${k.reason}`);
+  } catch (err) {
+    log.error("ash", `knowledge refresh failed; keeping previous files: ${err.message}`);
+  }
+  try {
+    const current = readConfigJson();
+    const merged = mergeAshBookConfig(current, process.env, { stateDir: STATE_DIR });
+    if (!configDeepEqual(current, merged)) {
+      const backup = `${configPath()}.bak-ash-${Date.now()}`;
+      fs.copyFileSync(configPath(), backup);
+      fs.chmodSync(backup, 0o600);
+      writeConfigJson(merged);
+      log.info("ash", `merged Ash book config (backup ${backup})`);
+    } else {
+      log.info("ash", "Ash book config already present");
+    }
+    log.info("ash", `bindings=${JSON.stringify((merged.bindings || []).filter((b) => b?.match?.accountId === "ash").map((b) => [b.agentId, b.match.peer?.id || "*"]))}`);
+  } catch (err) {
+    log.error("ash", `config merge failed; starting gateway anyway: ${err.message}`);
+  }
+}
+
 function readConfigJson() {
   return JSON.parse(fs.readFileSync(configPath(), "utf8"));
 }
@@ -852,6 +885,7 @@ async function ensureGatewayRunning() {
       await syncDiscordAndCoding();
       await syncRailwayAuth();
       syncIntentbiosCoachConfig();
+      await syncAshBook();
       await startGateway();
       const ready = await waitForGatewayReady({ timeoutMs: 60_000 });
       if (!ready) {
