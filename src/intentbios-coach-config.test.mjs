@@ -146,7 +146,9 @@ test("coach profile stays full when the global profile would drop plugin tools",
   assert.equal(merged.tools.profile, "coding");
   assert.deepEqual(merged.tools.deny, ["exec"]);
   assert.equal(merged.agents.entries.main.default, true);
-  assert.equal(merged.agents.entries.main.tools, undefined);
+  assert.deepEqual(merged.agents.entries.main.tools, {
+    alsoAllow: [...COACH_TOOL_NAMES, "intentbios"],
+  });
   assert.equal(merged.agents.entries[COACH_AGENT_ID].tools.profile, "full");
   assert.deepEqual(merged.agents.entries[COACH_AGENT_ID].tools.allow, [
     "session_status",
