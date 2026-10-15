@@ -52,13 +52,17 @@ export function mergeDiscordConfig(config, env = process.env) {
   }
   if (!next.groupPolicy || next.groupPolicy === "open") next.groupPolicy = "allowlist";
   if (next.allowBots === undefined) next.allowBots = false;
+  // Workflow needs threads + channel creation in Gustavo's server; moderation/roles stay off.
+  next.actions = { ...(isPlainObject(next.actions) ? next.actions : {}), messages: true, threads: true, channels: true, roles: false, moderation: false };
   if (next.configWrites === undefined) next.configWrites = false;
 
   if (guildIds.length > 0) {
     const guilds = isPlainObject(next.guilds) ? { ...next.guilds } : {};
     for (const id of guildIds) {
       const g = isPlainObject(guilds[id]) ? { ...guilds[id] } : {};
-      if (g.requireMention === undefined) g.requireMention = true;
+      // Until Gustavo's user ID is allowlisted, anyone in the guild could talk to the bot:
+      // require an @mention. With DISCORD_ALLOWED_USER_IDS set, only he can, so no mention needed.
+      g.requireMention = userIds.length === 0;
       if (userIds.length > 0) {
         g.users = Array.from(new Set([...(Array.isArray(g.users) ? g.users : []), ...userIds]));
       }

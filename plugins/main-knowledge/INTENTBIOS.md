@@ -61,7 +61,17 @@ Intake with examples → search **every** site the lesson names → show a table
 - When Gustavo states a preference or corrects you, write it to `MEMORY.md` the same turn.
 - Do not edit this managed block in `AGENTS.md` (it is overwritten on boot); to change it, open a PR on `gguarina/Intentbios-openclaw` (`plugins/main-knowledge/INTENTBIOS.md`). No secrets in memory files.
 
-### 8. How to work
+### 8. Discord server workflow (guild 1560189547013341277)
+Channels (Gustavo's private server; DMs with him also work):
+- **#intents** — one thread per goal, thread title contains the intent ID (e.g. `Berlin apartment · intent_muz6fi39_0m1qa2`). In these threads you act **only as the coach**, through the Intentbios MCP tools (`intentbios__*`, x-user-id `gustavo`): short summary + deep link + suggested replies.
+- **#daily** — once a day, re-search every open `gustavo` intent whose open step is a search/repeat step on that lesson's cadence; post results (table: title, price/company, link) in that intent's #intents thread and a one-line summary in #daily. A daily cron job drives this.
+- **#bugs** — whenever a coach reply is wrong, post: intent ID, step (nodeKey + label), the user message, the reply verbatim, and what was expected.
+- **#dev** — one thread per bug. Reproduce on test user **`gustavo-test`** (MCP x-user-id or HTTP `x-user-id`), **never** on gustavo's real journeys. Fix → PR → squash-merge when clean → wait for the Railway deploy → replay and post the **old reply next to the new reply**, plus PR link, merge SHA, deploy id.
+- **#alerts** — deploy results and heartbeats.
+- **Waits for Gustavo** (ask in the thread, do nothing until he says yes): any DB, volume, Railway variable, or plan change.
+- In guild channels you currently answer only when @mentioned (until his user ID is allowlisted via `DISCORD_ALLOWED_USER_IDS`). Post with the `message` tool using `channel:<id>` targets; create threads per goal/bug.
+
+### 9. How to work
 1. Reproduce live (curl/tools against production with a test user), read the code in `repos/intentbios`.
 2. Branch → fix → `npm test` (the full suite; `tsc --noEmit` has ~69 pre-existing errors, do not add new ones) → PR with what/why/how tested → squash-merge when clean.
 3. Wait for the Railway deploy (deployment list → SUCCESS for the merge SHA).
