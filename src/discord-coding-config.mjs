@@ -114,3 +114,28 @@ export function writeCodingSkills(workspaceDir) {
   fs.cpSync(codingSkillDir, dest, { recursive: true, force: true });
   return dest;
 }
+
+/**
+ * Register the Intentbios MCP connector (POST <INTENTBIOS_API_URL>/mcp) as mcp.servers.intentbios.
+ * Tools surface as intentbios__<tool>. x-user-id defaults to "gustavo" (INTENTBIOS_MCP_USER_ID).
+ */
+export function mergeIntentbiosMcp(config, env = process.env) {
+  if (!isPlainObject(config)) throw new Error("mergeIntentbiosMcp requires a config object");
+  const base = String(env.INTENTBIOS_MCP_URL || env.INTENTBIOS_API_URL || "").trim().replace(/\/+$/, "");
+  if (!base) return config;
+  const url = env.INTENTBIOS_MCP_URL ? base : `${base}/mcp`;
+  const userId = String(env.INTENTBIOS_MCP_USER_ID || "gustavo").trim();
+  const mcp = isPlainObject(config.mcp) ? { ...config.mcp } : {};
+  const servers = isPlainObject(mcp.servers) ? { ...mcp.servers } : {};
+  const current = isPlainObject(servers.intentbios) ? servers.intentbios : {};
+  servers.intentbios = {
+    ...current,
+    url,
+    transport: "streamable-http",
+    headers: { ...(isPlainObject(current.headers) ? current.headers : {}), "x-user-id": userId },
+    connectionTimeoutMs: current.connectionTimeoutMs ?? 15000,
+    requestTimeoutMs: current.requestTimeoutMs ?? 120000,
+  };
+  mcp.servers = servers;
+  return { ...config, mcp };
+}
