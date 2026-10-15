@@ -111,3 +111,17 @@ A: Go to `/setup` and click the "Run Doctor" button. This runs `openclaw doctor 
 ## Support
 
 Need help? [Request support on Railway Station](https://station.railway.com/all-templates/d0880c01-2cc5-462c-8b76-d84c1a203348)
+
+## Discord + coding setup (Intentbios fork)
+
+On boot (`src/discord-coding-config.mjs`, `syncDiscordAndCoding` in `src/server.js`):
+
+- If `DISCORD_BOT_TOKEN` is set: installs the pinned `@openclaw/discord` plugin (matching the OpenClaw version)
+  into the state dir and enables `channels.discord` with the token as an env SecretRef (never written to disk config).
+  DMs use **pairing** (approve codes on `/setup` → "Approve pairing", channel Discord). Guild channels are
+  **allowlist** and stay silent until `DISCORD_GUILD_ID` is set (then mention-only). Optional
+  `DISCORD_ALLOWED_USER_IDS` (comma-separated) switches DMs to an allowlist and restricts guild users.
+- Writes the `github-coding` skill to `<workspace>/skills/`, authenticates `gh`/`git` from `GH_TOKEN`,
+  and clones `gguarina/intentbios` into `<workspace>/repos/intentbios` (fetch only if it already exists).
+- Railway access for the agent is not configured. A Railway API token would plug in as `RAILWAY_API_TOKEN`
+  (e.g. backing a Railway MCP server under `mcp.servers`).
