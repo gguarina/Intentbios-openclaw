@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import express from "express";
 import httpProxy from "http-proxy";
@@ -692,6 +692,43 @@ function syncModelTiering() {
   }
 }
 
+// Evaluation setup: coach golden-set baseline (once) and the daily scorecard automation (07:40 Berlin,
+// command payload = no agent turn; the script's judge runs on flash with thinking off). Never throws.
+const EVALS_DIR_APP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../evals");
+const SCORECARD_NAME = "Daily scorecard";
+const ALERTS_CHANNEL_ID = "1560230070952529925";
+async function ensureEvals() {
+  const evalDir = path.join(WORKSPACE_DIR, "evals");
+  fs.mkdirSync(evalDir, { recursive: true });
+  const list = await runCmd(OPENCLAW_NODE, clawArgs(["automations", "list", "--json"]));
+  let jobs = [];
+  try {
+    const start = list.output.search(/[[{]/);
+    const j = JSON.parse(list.output.slice(start));
+    jobs = Array.isArray(j) ? j : j.jobs || j.automations || [];
+  } catch { jobs = []; }
+  const existing = jobs.find((j) => j?.name === SCORECARD_NAME);
+  if (list.code !== 0) {
+    log.error("evals", `automations list failed (exit=${list.code}); not creating the scorecard job`);
+  } else if (existing) {
+    log.info("evals", `scorecard automation present id=${existing.id}`);
+  } else {
+    const r = await runCmd(OPENCLAW_NODE, clawArgs([
+      "automations", "add", "--name", SCORECARD_NAME, "--cron", "40 7 * * *", "--tz", "Europe/Berlin",
+      "--command-argv", JSON.stringify([process.execPath, path.join(EVALS_DIR_APP, "scorecard.mjs")]),
+      "--command-cwd", EVALS_DIR_APP, "--timeout-seconds", "1500",
+      "--announce", "--channel", "discord", "--account", "default", "--to", `channel:${ALERTS_CHANNEL_ID}`, "--json",
+    ]));
+    const id = (r.output.match(/"id"\s*:\s*"([^"]+)"/) || [])[1];
+    log.info("evals", `scorecard automation create exit=${r.code} id=${id || "?"} ${r.code ? r.output.slice(-400) : ""}`);
+  }
+  if (!fs.existsSync(path.join(evalDir, "coach-baseline.json"))) {
+    log.info("evals", "no coach baseline; capturing one now");
+    const b = await runCmd(process.execPath, [path.join(EVALS_DIR_APP, "coach-golden.mjs"), "--baseline"], { cwd: EVALS_DIR_APP });
+    log.info("evals", `baseline exit=${b.code}\n${b.output.slice(-3000)}`);
+  }
+}
+
 function readConfigJson() {
   return JSON.parse(fs.readFileSync(configPath(), "utf8"));
 }
@@ -914,6 +951,7 @@ async function ensureGatewayRunning() {
       if (!ready) {
         throw new Error("Gateway did not become ready in time");
       }
+      ensureEvals().catch((err) => log.error("evals", `setup failed: ${err.message}`));
     })().finally(() => {
       gatewayStarting = null;
     });

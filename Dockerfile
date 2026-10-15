@@ -40,6 +40,7 @@ RUN npm install -g pnpm@11.24.0 \
 
 COPY src ./src
 COPY plugins ./plugins
+COPY evals ./evals
 COPY --chmod=755 entrypoint.sh ./entrypoint.sh
 
 RUN useradd -m -s /bin/bash openclaw \
