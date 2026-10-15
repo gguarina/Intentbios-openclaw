@@ -141,6 +141,28 @@ function ensureCoachAgent(agents, workspaceDir) {
   current.workspace = workspaceDir;
   seeded[COACH_AGENT_ID] = current;
 
+  // The general agent (Discord) runs under the global `coding` profile, which drops plugin
+  // tools. Add the intentbios tools on top of whatever it already has.
+  const generalId = Object.keys(seeded).find((id) => id === "main")
+    || Object.keys(seeded).find((id) => seeded[id]?.default === true && !id.startsWith("intentbios-"));
+  if (generalId) {
+    const general = isPlainObject(seeded[generalId]) ? { ...seeded[generalId] } : {};
+    const gTools = isPlainObject(general.tools) ? { ...general.tools } : {};
+    const extra = [...COACH_TOOL_NAMES, PLUGIN_ID];
+    if (Array.isArray(gTools.allow)) {
+      gTools.allow = unionAllow(gTools.allow, extra);
+    } else {
+      gTools.alsoAllow = unionAllow(gTools.alsoAllow, extra);
+    }
+    if (Array.isArray(gTools.deny)) {
+      const deny = withoutNames(gTools.deny, extra);
+      if (deny.length > 0) gTools.deny = deny;
+      else delete gTools.deny;
+    }
+    general.tools = gTools;
+    seeded[generalId] = general;
+  }
+
   if (sophia !== undefined) {
     seeded[SOPHIA_AGENT_ID] = sophia;
   }
