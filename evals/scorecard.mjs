@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { EVAL_DIR, runGolden, readBaseline, saveRun } from "./coach-golden.mjs";
+import { fileRunBugs } from "./bugs.mjs";
 
 const pct = (x) => (x == null ? "-" : `${Math.round(x * 100)}%`);
 const lines = [];
@@ -19,6 +20,8 @@ try {
   lines.push(`**Coach golden set** (intentbios-coach, flash/off): pass ${pct(run.passRate)} vs baseline ${pct(base?.passRate)}, judge ${run.meanJudge?.toFixed(2) ?? "-"} vs ${base?.meanJudge?.toFixed(2) ?? "-"}, latency p50 ${run.p50}ms / p95 ${run.p95}ms (baseline ${base?.p50 ?? "-"}/${base?.p95 ?? "-"})`);
   const failed = run.turns.filter((t) => !t.pass).map((t) => `${t.id}${Object.entries(t.checks).filter(([, v]) => !v).map(([k]) => ` !${k}`).join("")}${t.judge?.score != null ? ` j=${t.judge.score}` : ""}`);
   if (failed.length) lines.push(`Failing: ${failed.join("; ")}`);
+  const filed = fileRunBugs(run, base);
+  if (filed.length) lines.push(`#bugs: ${filed.map((f) => `${f.turnId} ${f.action}`).join(", ")}`);
   if (base && (run.passRate < base.passRate || (run.meanJudge != null && base.meanJudge != null && run.meanJudge < base.meanJudge - 0.5))) {
     flags.push("intentbios-coach quality is below baseline. Proposal: revert intentbios-coach to its previous setting (deepseek-v4-flash, thinking high). Not applied; Gustavo decides.");
   }
