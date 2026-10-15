@@ -29,6 +29,8 @@ RUN npm install -g \
   && node --version | grep -Eq '^v26\.' \
   && openclaw --version | grep -Eq '^OpenClaw 2026\.9\.4( |$)'
 RUN npm install -g clawhub@latest
+# Railway CLI for read-only deploy status/log checks (auth from RAILWAY_API_TOKEN at boot).
+RUN npm install -g --allow-scripts=@railway/cli @railway/cli@5.68.0 && railway --version
 
 WORKDIR /app
 

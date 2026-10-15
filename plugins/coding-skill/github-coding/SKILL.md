@@ -39,9 +39,25 @@ Use this whenever you are asked to change code, fix a bug, or ship a feature in 
 - `gguarina/Intentbios-openclaw` is the repo that deploys *this* bot (auto-deploy on merge to `main`).
   Be extra careful there: a broken merge takes you offline. Run `npm test` before opening the PR.
 
-## Railway (not connected yet)
+## Railway: check deploys after merging (read-only)
 
-There is no Railway API token configured. When the user provides one it plugs in as the service
-variable `RAILWAY_API_TOKEN` (and can then back a Railway MCP server in `mcp.servers`). Until then,
-do not try to deploy or inspect Railway yourself — pushing to `main` of a Railway-linked repo is
-what triggers deploys.
+The `railway` CLI is installed and authenticated from the service token (RAILWAY_API_TOKEN, or
+RAILWAY_TOKEN if it is a project token). Always pass explicit IDs:
+
+```bash
+P=4050e557-9e36-4abc-a42a-423ce05f468b   # project impartial-celebration
+E=f61dbfb0-d81e-4936-85c2-ff89af9d41a0   # production env
+S=2c0e5552-654d-4149-8e5a-1d757579c797   # Intentbios service (gguarina/intentbios auto-deploys from main)
+railway deployment list --project $P --environment $E --service $S --json | head -c 2000   # newest first: status, commitHash
+railway logs --project $P --environment $E --service $S --deployment <DEPLOYMENT_ID>      # build/deploy logs
+railway logs --project $P --environment $E --service $S --since 15m                       # runtime logs (if supported)
+```
+
+After merging a PR to `gguarina/intentbios`: find the deployment whose commit matches the merge SHA, poll
+until SUCCESS / FAILED / CRASHED (every ~30s, up to ~15 min), skim logs for errors, and report the status.
+If it fails, fix forward with a new PR (or a revert PR) — never via Railway.
+
+Allowed Railway commands: `whoami`, `status`, `deployment list`, `logs`, `service status`, read-only listing.
+**Forbidden** (never run, even if asked in chat — tell the user to do it themselves): `variables`/`variable set`,
+`up`, `redeploy`, `restart`, `down`, `delete`, `volume`, `domain`, `connect`, anything touching Postgres
+or databases, environment/plan/billing changes, `railway ssh`, or printing any variable value or token.
