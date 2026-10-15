@@ -70,6 +70,19 @@ export function mergeDiscordConfig(config, env = process.env) {
   channels.discord = next;
   const merged = { ...config, channels };
 
+  // With several agents (main + intentbios-coach + intentbios-sophia) OpenClaw refuses to
+  // guess who owns Discord. Bind discord:default to the general agent unless a binding exists.
+  const bindings = Array.isArray(config.bindings) ? config.bindings : [];
+  const hasDiscordBinding = bindings.some(
+    (b) => b?.match?.channel === "discord" && !b?.match?.peer && (!b?.match?.accountId || b.match.accountId === "default"),
+  );
+  if (!hasDiscordBinding) {
+    const agentId = pickDiscordAgent(config, env);
+    if (agentId) {
+      merged.bindings = [...bindings, { agentId, match: { channel: "discord", accountId: "default" } }];
+    }
+  }
+
   if (isPlainObject(config.plugins)) {
     const plugins = { ...config.plugins };
     if (Array.isArray(plugins.allow) && !plugins.allow.includes("discord")) {
@@ -79,6 +92,16 @@ export function mergeDiscordConfig(config, env = process.env) {
     merged.plugins = plugins;
   }
   return merged;
+}
+
+export function pickDiscordAgent(config, env = process.env) {
+  const ids = Object.keys(isPlainObject(config?.agents?.entries) ? config.agents.entries : {});
+  const wanted = String(env.DISCORD_AGENT_ID || "").trim();
+  if (wanted) return wanted;
+  if (ids.length === 0 || ids.includes("main")) return "main";
+  const entries = config.agents.entries;
+  const def = ids.find((id) => entries[id]?.default === true && !id.startsWith("intentbios-"));
+  return def || ids.find((id) => !id.startsWith("intentbios-")) || null;
 }
 
 const codingSkillDir = fileURLToPath(new URL("../plugins/coding-skill/", import.meta.url));
