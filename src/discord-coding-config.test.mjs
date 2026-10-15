@@ -58,3 +58,14 @@ test("keeps an existing discord binding", () => {
   const cfg = { bindings: [{ agentId: "x", match: { channel: "discord" } }] };
   assert.deepEqual(mergeDiscordConfig(cfg, { DISCORD_BOT_TOKEN: "x" }).bindings, cfg.bindings);
 });
+
+import { mergeIntentbiosMcp } from "./discord-coding-config.mjs";
+test("registers intentbios MCP server", () => {
+  const out = mergeIntentbiosMcp({}, { INTENTBIOS_API_URL: "https://coach.example/" });
+  assert.deepEqual(out.mcp.servers.intentbios, {
+    url: "https://coach.example/mcp", transport: "streamable-http",
+    headers: { "x-user-id": "gustavo" }, connectionTimeoutMs: 15000, requestTimeoutMs: 120000,
+  });
+  assert.deepEqual(mergeIntentbiosMcp(out, { INTENTBIOS_API_URL: "https://coach.example/" }), out);
+  assert.deepEqual(mergeIntentbiosMcp({ a: 1 }, {}), { a: 1 });
+});

@@ -20,7 +20,7 @@ import {
   writeCoachWorkspace,
 } from "./intentbios-coach-config.mjs";
 import { rebuildForwardedHeaders } from "./proxy-headers.js";
-import { mergeDiscordConfig, writeCodingSkills } from "./discord-coding-config.mjs";
+import { mergeDiscordConfig, mergeIntentbiosMcp, writeCodingSkills } from "./discord-coding-config.mjs";
 
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
 const STATE_DIR =
@@ -708,6 +708,16 @@ async function syncDiscordAndCoding() {
     } catch (err) {
       log.error("discord", `config merge failed: ${err.message}`);
     }
+  }
+
+  try {
+    const current = readConfigJson();
+    const merged = mergeIntentbiosMcp(current, process.env);
+    if (!configDeepEqual(current, merged)) writeConfigJson(merged);
+    const srv = merged.mcp?.servers?.intentbios;
+    log.info("mcp", srv ? `intentbios MCP: ${srv.url} x-user-id=${srv.headers?.["x-user-id"]}` : "intentbios MCP not configured");
+  } catch (err) {
+    log.error("mcp", `intentbios MCP merge failed: ${err.message}`);
   }
 
   let workspace = WORKSPACE_DIR;
