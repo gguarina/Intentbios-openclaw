@@ -11,6 +11,17 @@ export const ASH_TOOL_NAMES = [
   "book_grep",
 ];
 
+export const ASH_WRITE_TOOL_NAMES = [
+  "work_start",
+  "work_edit",
+  "work_write",
+  "work_diff",
+  "work_discard",
+  "work_commit",
+  "work_pr",
+  "work_merge",
+];
+
 const VOLUME_TITLES = { 1: "The Ash", 2: "The Bands", 3: "The Pattern" };
 
 function scrub(text, env = process.env) {
@@ -70,7 +81,7 @@ export async function postToDiscord(channelId, content, files = []) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(`discord post failed: ${res.status} ${scrub(data.message || "")}`);
-  return { messageId: data.id, channelId };
+  return { messageId: data.id, channelId, jumpUrl: data.guild_id || process.env.ASH_DISCORD_GUILD_ID ? `https://discord.com/channels/${data.guild_id || String(process.env.ASH_DISCORD_GUILD_ID).trim()}/${channelId}/${data.id}` : undefined };
 }
 
 export async function executeAshTool(name, params, settings) {
@@ -133,6 +144,38 @@ export async function executeAshTool(name, params, settings) {
       }
       return result;
     }
+    case "work_start":
+      return runner(settings, "POST", "/work/start", { slug: params.slug });
+    case "work_edit":
+      return runner(settings, "POST", "/work/edit", { slug: params.slug, file: params.file, old: params.old, new: params.new ?? "" });
+    case "work_write":
+      return runner(settings, "POST", "/work/write", { slug: params.slug, file: params.file, content: params.content, mode: params.mode || "append" });
+    case "work_diff":
+      return runner(settings, "POST", "/work/diff", { slug: params.slug });
+    case "work_discard":
+      return runner(settings, "POST", "/work/discard", { slug: params.slug });
+    case "work_commit": {
+      const d = await runner(settings, "POST", "/work/commit", { slug: params.slug, message: params.message, volumes: params.volumes });
+      if (!d.committed) return { ...d, patch: clip(d.patch, 3000), locks_output: clip(d.locks_output, 3000) };
+      const result = { branch: d.branch, sha: d.sha, committed: true, locks: d.locks, pushed: true, stat: d.stat, patch: clip(d.patch, 3000), build_ok: d.build?.ok };
+      if (settings.buildsChannelId) {
+        const files = [];
+        for (const v of d.build?.volumes || []) {
+          if (!v.ok || !v.path) continue;
+          const res = await runner(settings, "GET", v.path, null, { raw: true, timeoutMs: 120_000 });
+          files.push({ name: v.path.split("/").pop(), bytes: new Uint8Array(await res.arrayBuffer()) });
+        }
+        const lines = (d.build?.volumes || []).map((v) => `• Book ${v.volume}${VOLUME_TITLES[v.volume] ? ` (${VOLUME_TITLES[v.volume]})` : ""}: ${v.ok ? "ok" : "FAILED"}`);
+        const content = `**Work build ${d.build?.ok ? "OK ✅" : "FAILED ❌"}** — \`${d.branch}\` @ \`${String(d.sha).slice(0, 7)}\` (locks PASS)\n${lines.join("\n")}`;
+        result.pdfs = await postToDiscord(settings.buildsChannelId, content, files);
+      }
+      return result;
+    }
+    case "work_pr":
+      return runner(settings, "POST", "/work/pr", { slug: params.slug, title: params.title, body: params.body });
+    case "work_merge":
+      if (params.confirm !== "merge") throw new Error('work_merge needs confirm="merge", and only after Gustavo typed "merge" for this branch');
+      return runner(settings, "POST", "/work/merge", { slug: params.slug, confirm: "merge" }, { timeoutMs: 600_000 });
     default:
       throw new Error(`unknown ash-book tool ${name}`);
   }
