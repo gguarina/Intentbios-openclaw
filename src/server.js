@@ -20,7 +20,7 @@ import {
   writeCoachWorkspace,
 } from "./intentbios-coach-config.mjs";
 import { rebuildForwardedHeaders } from "./proxy-headers.js";
-import { mergeDiscordConfig, mergeIntentbiosMcp, writeCodingSkills } from "./discord-coding-config.mjs";
+import { mergeDiscordConfig, mergeIntentbiosMcp, writeCodingSkills, writeKnowledge } from "./discord-coding-config.mjs";
 
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
 const STATE_DIR =
@@ -726,6 +726,7 @@ async function syncDiscordAndCoding() {
     log.info("coding", `tools.profile=${readConfigJson().tools?.profile ?? "(unset=full)"}`);
     writeCodingSkills(workspace);
     log.info("coding", `wrote coding skill to ${workspace}/skills`);
+    log.info("knowledge", `wrote Intentbios knowledge block to ${writeKnowledge(workspace)}`);
   } catch (err) {
     log.error("coding", `skill write failed: ${err.message}`);
   }

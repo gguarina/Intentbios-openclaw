@@ -146,3 +146,29 @@ export function mergeIntentbiosMcp(config, env = process.env) {
   mcp.servers = servers;
   return { ...config, mcp };
 }
+
+const knowledgeFile = fileURLToPath(new URL("../plugins/main-knowledge/INTENTBIOS.md", import.meta.url));
+export const KNOWLEDGE_BEGIN = "<!-- intentbios-knowledge:begin -->";
+export const KNOWLEDGE_END = "<!-- intentbios-knowledge:end -->";
+
+/** Insert or replace the managed Intentbios block in text (AGENTS.md); keeps the rest intact. */
+export function upsertKnowledgeBlock(text, block) {
+  const managed = `${KNOWLEDGE_BEGIN}\n${block.trim()}\n${KNOWLEDGE_END}`;
+  const src = String(text || "");
+  const start = src.indexOf(KNOWLEDGE_BEGIN);
+  const end = src.indexOf(KNOWLEDGE_END);
+  if (start >= 0 && end > start) {
+    return src.slice(0, start) + managed + src.slice(end + KNOWLEDGE_END.length);
+  }
+  return src.trim() ? `${src.replace(/\s+$/, "")}\n\n${managed}\n` : `${managed}\n`;
+}
+
+/** Write the Intentbios knowledge block into <workspace>/AGENTS.md (loaded every session). */
+export function writeKnowledge(workspaceDir) {
+  const target = path.join(workspaceDir, "AGENTS.md");
+  const block = fs.readFileSync(knowledgeFile, "utf8");
+  const current = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : "";
+  const next = upsertKnowledgeBlock(current, block);
+  if (next !== current) fs.writeFileSync(target, next, "utf8");
+  return target;
+}
