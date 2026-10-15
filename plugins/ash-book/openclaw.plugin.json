@@ -5,7 +5,7 @@
   "categories": ["other"],
   "activation": { "onStartup": true },
   "contracts": {
-    "tools": ["book_status", "book_locks", "book_build", "book_file", "book_chapters", "book_chapter", "book_grep", "work_start", "work_edit", "work_write", "work_diff", "work_discard", "work_commit", "work_pr", "work_merge"]
+    "tools": ["book_status", "book_locks", "book_build", "book_file", "book_chapters", "book_chapter", "book_grep", "book_branches", "work_start", "work_edit", "work_write", "work_diff", "work_discard", "work_commit", "work_pr", "work_merge"]
   },
   "configSchema": {
     "type": "object",

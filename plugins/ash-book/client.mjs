@@ -9,6 +9,7 @@ export const ASH_TOOL_NAMES = [
   "book_chapters",
   "book_chapter",
   "book_grep",
+  "book_branches",
 ];
 
 export const ASH_WRITE_TOOL_NAMES = [
@@ -88,6 +89,8 @@ export async function executeAshTool(name, params, settings) {
   const branch = String(params.branch || settings.defaultBranch || "rewrite");
   const q = (o) => "?" + new URLSearchParams(Object.entries(o).filter(([, v]) => v !== undefined && v !== null && v !== "")).toString();
   switch (name) {
+    case "book_branches":
+      return runner(settings, "GET", "/branches");
     case "book_status":
       return runner(settings, "GET", "/status");
     case "book_file": {

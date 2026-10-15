@@ -11,6 +11,10 @@ const file = { type: "string", description: "Repo path, e.g. latex/volume-02-the
 const volume = { type: "integer", minimum: 1, maximum: 3, description: "1 = The Ash, 2 = The Bands, 3 = The Pattern." };
 
 const TOOLS = {
+  book_branches: {
+    description: "List the trilogy's branches on Origin (name, sha, last commit date and subject), newest first. Use this instead of guessing branch names. rewrite is canonical; main is the old Oct 5 version.",
+    parameters: { type: "object", additionalProperties: false, properties: {} },
+  },
   book_status: {
     description: "Last checkout/locks/build results from book-runner.",
     parameters: { type: "object", additionalProperties: false, properties: {} },
