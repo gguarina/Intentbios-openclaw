@@ -658,6 +658,24 @@ function mainWorkspaceDir(config) {
   return typeof fromConfig === "string" && fromConfig.trim() ? fromConfig.trim() : WORKSPACE_DIR;
 }
 
+/** Keep gateway.auth.token in openclaw.json equal to OPENCLAW_GATEWAY_TOKEN (rotation). */
+function syncGatewayAuthToken() {
+  if (!isConfigured() || !OPENCLAW_GATEWAY_TOKEN) return;
+  try {
+    const cfg = readConfigJson();
+    const auth = cfg.gateway?.auth || {};
+    if (auth.token === OPENCLAW_GATEWAY_TOKEN) {
+      log.info("gateway", "gateway.auth.token already in sync");
+      return;
+    }
+    cfg.gateway = { ...(cfg.gateway || {}), auth: { ...auth, token: OPENCLAW_GATEWAY_TOKEN } };
+    writeConfigJson(cfg);
+    log.info("gateway", "synced gateway.auth.token from OPENCLAW_GATEWAY_TOKEN");
+  } catch (err) {
+    log.error("gateway", `gateway.auth.token sync failed: ${err.message}`);
+  }
+}
+
 /** Discord channel (plugin + config) and coding skill. Never throws: boot must continue. */
 async function syncDiscordAndCoding() {
   if (!isConfigured()) return;
@@ -812,6 +830,7 @@ async function ensureGatewayRunning() {
       await syncProviderEnvSecrets();
       await syncTrustedProxies();
       await syncAllowedOrigins();
+      syncGatewayAuthToken();
       await syncDiscordAndCoding();
       await syncRailwayAuth();
       syncIntentbiosCoachConfig();
@@ -910,6 +929,14 @@ function checkSetupBasicAuth(header) {
   const password = idx >= 0 ? decoded.slice(idx + 1) : "";
   const a = crypto.createHash("sha256").update(password).digest();
   const b = crypto.createHash("sha256").update(SETUP_PASSWORD).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
+function hasValidGatewayBearer(header) {
+  const m = /^Bearer\s+(.+)$/i.exec(String(header || "").trim());
+  if (!m || !OPENCLAW_GATEWAY_TOKEN) return false;
+  const a = crypto.createHash("sha256").update(m[1].trim()).digest();
+  const b = crypto.createHash("sha256").update(String(OPENCLAW_GATEWAY_TOKEN)).digest();
   return crypto.timingSafeEqual(a, b);
 }
 
@@ -2177,6 +2204,15 @@ app.use(async (req, res) => {
     if (!authed) return;
   }
 
+  // Everything else proxied to the gateway gets the gateway token injected, so the caller
+  // must prove it already has it (Bearer) or know the setup password (Basic). /hooks/ keeps
+  // the gateway's own hook auth.
+  if (!isDashboardPath(req.path) && !req.path.startsWith("/hooks/")) {
+    if (!hasValidGatewayBearer(req.headers.authorization) && !checkSetupBasicAuth(req.headers.authorization)) {
+      return res.status(401).json({ error: { message: "Unauthorized", type: "unauthorized" } });
+    }
+  }
+
   if (req.path === "/openclaw" && !req.query.token) {
     return res.redirect(`/openclaw?token=${OPENCLAW_GATEWAY_TOKEN}`);
   }
@@ -2214,7 +2250,7 @@ server.on("upgrade", async (req, socket, head) => {
   }
   // The proxy injects the gateway token into WebSocket upgrades (full operator access),
   // so require the setup password here too.
-  if (!checkSetupBasicAuth(req.headers.authorization)) {
+  if (!checkSetupBasicAuth(req.headers.authorization) && !hasValidGatewayBearer(req.headers.authorization)) {
     socket.write('HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm="OpenClaw Setup"\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
     socket.destroy();
     return;
