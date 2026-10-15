@@ -27,7 +27,7 @@ export const ASH_AGENTS = {
   "ash-continuity": {
     name: "Ash Continuity",
     model: "deepseek/deepseek-v4-flash",
-    tools: ["book_grep", "book_chapter", "book_chapters", "book_file"],
+    tools: ["book_grep", "book_chapter", "book_chapters", "book_file", "book_branches"],
     knowledge: true,
   },
 };

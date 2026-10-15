@@ -47,6 +47,9 @@ test("merge keeps Intentbios intact and adds routed Ash account", () => {
   assert.ok(m.plugins.load.paths.some((p) => p.endsWith("plugins/ash-book")));
   assert.deepEqual(m.agents.entries["ash-coldreader"].tools.allow, ["book_chapters", "book_chapter"]);
   assert.ok(m.agents.entries["ash-editor"].tools.allow.includes("work_commit"));
+  assert.ok(m.agents.entries["ash-editor"].tools.allow.includes("book_branches"));
+  assert.ok(m.agents.entries["ash-continuity"].tools.allow.includes("book_branches"));
+  assert.ok(!m.agents.entries["ash-coldreader"].tools.allow.includes("book_branches"));
   assert.ok(!m.agents.entries["ash-continuity"].tools.allow.some((t) => t.startsWith("work_")));
 });
 
