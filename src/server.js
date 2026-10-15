@@ -901,6 +901,23 @@ function requireSetupAuth(req, res, next) {
   return next();
 }
 
+function checkSetupBasicAuth(header) {
+  if (!SETUP_PASSWORD) return false;
+  const [scheme, encoded] = String(header || "").split(" ");
+  if (scheme !== "Basic" || !encoded) return false;
+  const decoded = Buffer.from(encoded, "base64").toString("utf8");
+  const idx = decoded.indexOf(":");
+  const password = idx >= 0 ? decoded.slice(idx + 1) : "";
+  const a = crypto.createHash("sha256").update(password).digest();
+  const b = crypto.createHash("sha256").update(SETUP_PASSWORD).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
+/** Control UI routes: /openclaw and anything under it. */
+function isDashboardPath(p) {
+  return p === "/openclaw" || p.startsWith("/openclaw/");
+}
+
 const app = express();
 app.disable("x-powered-by");
 app.use("/setup/api", express.json({ limit: "1mb" }));
@@ -2150,6 +2167,16 @@ app.use(async (req, res) => {
     }
   }
 
+  // The dashboard hands out (and accepts) the gateway token: setup password only.
+  if (isDashboardPath(req.path)) {
+    const authed = await new Promise((resolve) => {
+      let done = false;
+      requireSetupAuth(req, res, () => { done = true; resolve(true); });
+      if (!done) resolve(res.headersSent ? false : true);
+    });
+    if (!authed) return;
+  }
+
   if (req.path === "/openclaw" && !req.query.token) {
     return res.redirect(`/openclaw?token=${OPENCLAW_GATEWAY_TOKEN}`);
   }
@@ -2182,6 +2209,13 @@ const server = app.listen(PORT, () => {
 
 server.on("upgrade", async (req, socket, head) => {
   if (!isConfigured()) {
+    socket.destroy();
+    return;
+  }
+  // The proxy injects the gateway token into WebSocket upgrades (full operator access),
+  // so require the setup password here too.
+  if (!checkSetupBasicAuth(req.headers.authorization)) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm="OpenClaw Setup"\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
     socket.destroy();
     return;
   }
