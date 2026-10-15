@@ -123,5 +123,4 @@ On boot (`src/discord-coding-config.mjs`, `syncDiscordAndCoding` in `src/server.
   `DISCORD_ALLOWED_USER_IDS` (comma-separated) switches DMs to an allowlist and restricts guild users.
 - Writes the `github-coding` skill to `<workspace>/skills/`, authenticates `gh`/`git` from `GH_TOKEN`,
   and clones `gguarina/intentbios` into `<workspace>/repos/intentbios` (fetch only if it already exists).
-- Railway access for the agent is not configured. A Railway API token would plug in as `RAILWAY_API_TOKEN`
-  (e.g. backing a Railway MCP server under `mcp.servers`).
+- Railway CLI (read-only use per the skill) authenticates from `RAILWAY_API_TOKEN`; boot detects account vs project token.

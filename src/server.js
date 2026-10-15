@@ -757,6 +757,48 @@ async function setupGitWorkspace(workspace) {
   log.info("coding", `repos/intentbios HEAD: ${stripAnsi(head.output || "").trim()}`);
 }
 
+const RAILWAY_IDS = {
+  project: "4050e557-9e36-4abc-a42a-423ce05f468b",
+  environment: "f61dbfb0-d81e-4936-85c2-ff89af9d41a0",
+  intentbiosService: "2c0e5552-654d-4149-8e5a-1d757579c797",
+};
+
+/**
+ * RAILWAY_API_TOKEN may be an account/workspace token (CLI reads RAILWAY_API_TOKEN)
+ * or a project token (CLI reads RAILWAY_TOKEN). Detect which works and export the
+ * right variable for the gateway (and its exec tool). Never logs the value.
+ */
+async function syncRailwayAuth() {
+  const token = (process.env.RAILWAY_API_TOKEN || "").trim();
+  if (!token) return;
+  const base = { ...process.env };
+  delete base.RAILWAY_TOKEN;
+  delete base.RAILWAY_API_TOKEN;
+  const listArgs = ["deployment", "list", "--project", RAILWAY_IDS.project, "--environment", RAILWAY_IDS.environment, "--service", RAILWAY_IDS.intentbiosService, "--json"];
+  try {
+    const who = await runPlain("railway", ["whoami"], { ...base, RAILWAY_API_TOKEN: token });
+    const whoLine = stripAnsi(who.output || "").trim().split("\n").pop()?.replace(/\S+@\S+/g, "[email]");
+    log.info("railway", `whoami (account token) exit=${who.code} ${whoLine || ""}`);
+    const acct = await runPlain("railway", listArgs, { ...base, RAILWAY_API_TOKEN: token });
+    log.info("railway", `deployment list (account token) exit=${acct.code}`);
+    if (acct.code === 0) {
+      log.info("railway", "using RAILWAY_API_TOKEN as account token");
+      return;
+    }
+    const proj = await runPlain("railway", listArgs, { ...base, RAILWAY_TOKEN: token });
+    log.info("railway", `deployment list (project token) exit=${proj.code}`);
+    if (proj.code === 0) {
+      process.env.RAILWAY_TOKEN = token;
+      delete process.env.RAILWAY_API_TOKEN;
+      log.info("railway", "using token as project token (exported RAILWAY_TOKEN)");
+      return;
+    }
+    log.warn("railway", `token rejected for both modes: ${stripAnsi(proj.output || "").slice(-200)}`);
+  } catch (err) {
+    log.error("railway", `auth check failed: ${err.message}`);
+  }
+}
+
 async function ensureGatewayRunning() {
   if (!isConfigured()) return { ok: false, reason: "not configured" };
   if (gatewayProc) return { ok: true };
@@ -770,6 +812,7 @@ async function ensureGatewayRunning() {
       await syncTrustedProxies();
       await syncAllowedOrigins();
       await syncDiscordAndCoding();
+      await syncRailwayAuth();
       syncIntentbiosCoachConfig();
       await startGateway();
       const ready = await waitForGatewayReady({ timeoutMs: 60_000 });
