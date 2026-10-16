@@ -11,5 +11,15 @@
     { "id": "choice", "seq": "choice", "create": true, "message": "Help me choose between a BahnCard 25 and a BahnCard 50" },
     { "id": "schedule", "seq": "schedule", "create": true, "message": "Schedule a dentist appointment for next week" },
     { "id": "no-skill", "seq": "noskill", "create": true, "message": "Water the plants on the balcony" }
+  ],
+  "interpretation": [
+    {
+      "id": "apartment-find",
+      "rawInput": "Find an apartment in Berlin under 1200 euros",
+      "message": "The city is Berlin and the budget is €1200.",
+      "expect": ["Berlin"],
+      "mustNotInclude": [],
+      "minScore": 0.8
+    }
   ]
 }
