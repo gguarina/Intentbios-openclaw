@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { ASH_TOOL_NAMES, ASH_WRITE_TOOL_NAMES } from "../plugins/ash-book/client.mjs";
+import { ASH_REPORT_TOOL, ASH_TOOL_NAMES, ASH_WRITE_TOOL_NAMES } from "../plugins/ash-book/client.mjs";
 
 export const ASH_ACCOUNT_ID = "ash";
 export const ASH_PLUGIN_ID = "ash-book";
@@ -15,19 +15,19 @@ export const ASH_AGENTS = {
   "ash-editor": {
     name: "Ash Editor",
     model: "deepseek/deepseek-v4-pro",
-    tools: [...ASH_TOOL_NAMES, ...ASH_WRITE_TOOL_NAMES],
+    tools: [...ASH_TOOL_NAMES, ...ASH_WRITE_TOOL_NAMES, ASH_REPORT_TOOL],
     knowledge: true,
   },
   "ash-coldreader": {
     name: "Ash Cold Reader",
     model: "deepseek/deepseek-v4-flash",
-    tools: ["book_chapters", "book_chapter"],
+    tools: ["book_chapters", "book_chapter", ASH_REPORT_TOOL],
     knowledge: false,
   },
   "ash-continuity": {
     name: "Ash Continuity",
     model: "deepseek/deepseek-v4-flash",
-    tools: ["book_grep", "book_chapter", "book_chapters", "book_file", "book_branches"],
+    tools: ["book_grep", "book_chapter", "book_chapters", "book_file", "book_branches", ASH_REPORT_TOOL],
     knowledge: true,
   },
 };
