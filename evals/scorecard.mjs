@@ -23,6 +23,13 @@ try {
   const filed = fileRunBugs(run, base);
   if (filed.length) lines.push(`#bugs: ${filed.map((f) => `${f.turnId} ${f.action}`).join(", ")}`);
   const interp = run.interpretation;
+  const probe = run.payloadProbe;
+  if (probe) {
+    lines.push(probe.ran
+      ? `**Client payload (P8.3)**: ${probe.pass ? "pass" : "FAIL"} — ${probe.bytes} bytes, lessonBody ${probe.hasLessonBody ? "LEAKED" : "absent"}, contract ${probe.hasContract ? "LEAKED" : "absent"}, summary ${probe.summaryIsStatusLine ? "is a status line" : "coaching"}`
+      : `**Client payload (P8.3)**: not run (${probe.note})`);
+    if (probe.ran && !probe.pass) flags.push("The client journey payload leaks the lesson body or the contract, or the card summary is a status line (P8.1/P8.3). Proposal: fix forward. Not applied; Gustavo decides.");
+  }
   if (interp?.cases?.length) {
     const failing = interp.cases.filter((c) => !c.pass);
     lines.push(`**Interpretation (P5.7)**: pass ${pct(interp.passRate)}${failing.length ? ` — failing: ${failing.map((c) => `${c.id}${c.uncited ? ` !uncited=${c.uncited}` : ""}${c.missing?.length ? ` !missing=${c.missing.join("/")}` : ""}${c.invented?.length ? ` !invented=${c.invented.join("/")}` : ""}`).join("; ")}` : ""}`);
