@@ -66,8 +66,11 @@ try {
   }
 } catch (err) { spend.push(`balance unavailable (${err.message})`); }
 try {
-  const out = execFileSync("openclaw", ["gateway", "usage-cost", "--days", "1", "--all-agents"], { encoding: "utf8", timeout: 60_000 });
-  spend.push("OpenClaw usage (1d): " + out.split("\n").filter((l) => /token|cost|\$|total|deepseek/i.test(l)).slice(0, 8).join(" | "));
+  // The human-readable output of usage-cost prints zeros; only --json carries the ledger.
+  const out = execFileSync("openclaw", ["gateway", "usage-cost", "--days", "1", "--all-agents", "--json"], { encoding: "utf8", timeout: 60_000 });
+  const totals = JSON.parse(out)?.totals || {};
+  const n = (x) => Number(x || 0).toLocaleString("en-US");
+  spend.push(`OpenClaw usage (1d): $${Number(totals.totalCost || 0).toFixed(2)} · ${n(totals.totalTokens)} tokens (in ${n(totals.input)}, out ${n(totals.output)}, cache-read ${n(totals.cacheRead)})`);
 } catch { spend.push("OpenClaw usage-cost unavailable"); }
 try {
   const dir = "/tmp/openclaw";
