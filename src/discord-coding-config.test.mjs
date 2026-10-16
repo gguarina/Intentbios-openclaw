@@ -32,9 +32,15 @@ test("tightens open policies and applies user/guild allowlists", () => {
   assert.deepEqual(d.allowFrom, ["123456789012345678"]);
   assert.equal(d.dm.policy, "allowlist");
   assert.equal(d.groupPolicy, "allowlist");
-  assert.deepEqual(d.guilds["223456789012345678"], { requireMention: false, users: ["123456789012345678"] });
+  const gg = d.guilds["223456789012345678"];
+  assert.equal(gg.requireMention, false);
+  assert.deepEqual(gg.users, ["123456789012345678"]);
+  assert.deepEqual(gg.channels["*"], { enabled: true, requireMention: false, users: ["123456789012345678"] });
+  assert.equal(gg.channels["1560230058268827713"].requireMention, false);
+  assert.match(gg.channels["1560230058268827713"].systemPrompt, /#intents/);
   const g = mergeDiscordConfig({}, { DISCORD_BOT_TOKEN: "x", DISCORD_GUILD_ID: "223456789012345678" }).channels.discord.guilds["223456789012345678"];
-  assert.deepEqual(g, { requireMention: true });
+  assert.equal(g.requireMention, true);
+  assert.deepEqual(g.channels["*"], { enabled: true, requireMention: true });
 });
 
 test("is idempotent", () => {

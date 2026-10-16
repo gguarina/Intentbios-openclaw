@@ -27,6 +27,14 @@ function parseIdList(raw) {
  *   then only that guild, only on @mention, and only from allowed user IDs.
  * - Other bots are ignored; config writes from chat are disabled.
  */
+export const INTENTS_CHANNEL_ID = "1560230058268827713";
+export const INTENTS_PROMPT = [
+  "This is #intents: act as Gustavo's Intentbios coach here, not as a coder.",
+  "New goal -> create it with intentbios__intent_create (user gustavo), then coach it with intentbios__journey_message.",
+  "Follow-ups in the same thread continue that intent. One step at a time, short replies, suggest 2-3 example answers when a condition is missing,",
+  "never invent listings or facts, always include the step deepLink. No code changes or PRs from this channel; send coding asks to #dev.",
+].join(" ");
+
 export function mergeDiscordConfig(config, env = process.env) {
   if (!isPlainObject(config)) throw new Error("mergeDiscordConfig requires a config object");
   if (!String(env[DISCORD_TOKEN_ENV] || "").trim()) return config;
@@ -66,6 +74,16 @@ export function mergeDiscordConfig(config, env = process.env) {
       if (userIds.length > 0) {
         g.users = Array.from(new Set([...(Array.isArray(g.users) ? g.users : []), ...userIds]));
       }
+      // Explicit channel map: "*" keeps every channel (incl. threads and forum posts, which inherit
+      // their parent) open to the allowed users; #intents additionally gets the coach behavior.
+      const chans = isPlainObject(g.channels) ? { ...g.channels } : {};
+      const base = { enabled: true, requireMention: g.requireMention, ...(g.users ? { users: g.users } : {}) };
+      chans["*"] = { ...(isPlainObject(chans["*"]) ? chans["*"] : {}), ...base };
+      const intentsId = parseIdList(env.DISCORD_INTENTS_CHANNEL_ID || INTENTS_CHANNEL_ID)[0];
+      if (intentsId) {
+        chans[intentsId] = { ...(isPlainObject(chans[intentsId]) ? chans[intentsId] : {}), ...base, systemPrompt: INTENTS_PROMPT };
+      }
+      g.channels = chans;
       guilds[id] = g;
     }
     next.guilds = guilds;

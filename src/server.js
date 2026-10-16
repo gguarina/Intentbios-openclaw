@@ -735,6 +735,16 @@ async function ensureEvals() {
   }
 }
 
+/** Read-only: log Discord channel status and the bot's permissions in #intents (no secrets printed). */
+async function discordDiagnostics() {
+  if (!process.env.DISCORD_BOT_TOKEN?.trim()) return;
+  const redact = (t) => t.replace(/[A-Za-z0-9_-]{24,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{20,}/g, "[REDACTED]");
+  const st = await runCmd(OPENCLAW_NODE, clawArgs(["channels", "status", "--probe"]));
+  log.info("discord-diag", `channels status exit=${st.code}\n${redact(st.output).split("\n").filter((l) => /discord|permission|missing|warn|guild|channel/i.test(l)).slice(0, 40).join("\n")}`);
+  const pm = await runCmd(OPENCLAW_NODE, clawArgs(["message", "permissions", "--channel", "discord", "--account", "default", "--target", "channel:1560230058268827713", "--json"]));
+  log.info("discord-diag", `#intents permissions exit=${pm.code} ${redact(pm.output).slice(-1500)}`);
+}
+
 function readConfigJson() {
   return JSON.parse(fs.readFileSync(configPath(), "utf8"));
 }
@@ -958,6 +968,7 @@ async function ensureGatewayRunning() {
         throw new Error("Gateway did not become ready in time");
       }
       ensureEvals().catch((err) => log.error("evals", `setup failed: ${err.message}`));
+      discordDiagnostics().catch((err) => log.error("discord-diag", err.message));
     })().finally(() => {
       gatewayStarting = null;
     });
