@@ -31,6 +31,11 @@ export function deterministicChecks(turn, out, priorReplies) {
   if (out?.path !== "agent") {
     checks.summaryShort = summary.length > 0 && summary.length <= 220;
     checks.deepLink = /intentId=/.test(String(card.deepLink || ""));
+    // P8.1: the card summary is coaching, never the "<label> is the open step." status line.
+    checks.summaryNotStatusLine = summary.length > 0 && !/\bis the open step\.?\s*$/i.test(summary);
+    // P8.4: the replies are derived from the lesson, never only the generic trio.
+    const srAll = (card.suggestedReplies || []).map((r) => String(r).toLowerCase().trim());
+    checks.repliesNotGeneric = srAll.length > 0 && !srAll.every((r) => GENERIC.has(r));
   }
   if (turn.expectsCondition && questions(reply).length) {
     const sr = (card.suggestedReplies || []).map((r) => String(r));
@@ -110,12 +115,52 @@ export async function runGolden({ baseline = readBaseline() } = {}) {
   const q = (p) => lat[Math.min(lat.length - 1, Math.floor(p * lat.length))];
   const scores = results.map((r) => r.judge?.score).filter((s) => typeof s === "number");
   const interpretation = await runInterpretationCases();
+  const payloadProbe = await runPayloadLeakProbe();
   return {
     at: new Date().toISOString(), userId: GOLDEN.userId, turns: results,
     passRate: results.filter((r) => r.pass).length / results.length,
     meanJudge: scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null,
-    p50: q(0.5), p95: q(0.95), interpretation,
+    p50: q(0.5), p95: q(0.95), interpretation, payloadProbe,
   };
+}
+
+// P8.3: the raw lesson and the step contract must never reach the client. Create a guest find intent
+// and post one normal message, then scan the raw JSON the journey route returns.
+async function runPayloadLeakProbe() {
+  const api = String(process.env.INTENTBIOS_API_URL || "").trim().replace(/\/+$/, "");
+  if (!api) return { ran: false, note: "INTENTBIOS_API_URL unset" };
+  const userId = `guest_p8_probe_${Date.now().toString(36)}`;
+  const headers = { "content-type": "application/json", "x-user-id": userId };
+  try {
+    const c = await fetch(`${api}/api/intents`, {
+      method: "POST", headers,
+      body: JSON.stringify({ rawInput: "Find a systems engineer job in Berlin" }),
+      signal: AbortSignal.timeout(180_000),
+    });
+    const cj = await c.json().catch(() => ({}));
+    if (!cj.intentId) return { ran: false, note: "no intentId from create" };
+    const m = await fetch(`${api}/api/intents/${encodeURIComponent(cj.intentId)}/journey/message`, {
+      method: "POST", headers,
+      body: JSON.stringify({ message: "I am ready to start looking for a job.", userId }),
+      signal: AbortSignal.timeout(180_000),
+    });
+    const raw = await m.text();
+    let body = {};
+    try { body = JSON.parse(raw); } catch { body = {}; }
+    const card = body?.coachCard || {};
+    const summary = String(card.summary || "");
+    const replies = Array.isArray(card.suggestedReplies) ? card.suggestedReplies.map(String) : [];
+    const hasLessonBody = /"lessonBody"/.test(raw);
+    const hasContract = /intentbios-contract/.test(raw);
+    const summaryIsStatusLine = /\bis the open step\b/i.test(summary);
+    return {
+      ran: true, status: m.status, bytes: raw.length, hasLessonBody, hasContract,
+      summary, summaryIsStatusLine, replies,
+      pass: m.status === 200 && !hasLessonBody && !hasContract && !summaryIsStatusLine,
+    };
+  } catch (err) {
+    return { ran: false, note: String(err?.message || err) };
+  }
 }
 
 // P5.7 — the interpretation layer is SCORED, never asserted. Acquisition is unit-tested against fixtures;
