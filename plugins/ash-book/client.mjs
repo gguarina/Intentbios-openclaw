@@ -12,6 +12,8 @@ export const ASH_TOOL_NAMES = [
   "book_branches",
 ];
 
+export const ASH_REPORT_TOOL = "post_report";
+
 export const ASH_WRITE_TOOL_NAMES = [
   "work_start",
   "work_edit",
@@ -24,6 +26,60 @@ export const ASH_WRITE_TOOL_NAMES = [
 ];
 
 const VOLUME_TITLES = { 1: "The Ash", 2: "The Bands", 3: "The Pattern" };
+
+const DISCORD_API = "https://discord.com/api/v10";
+
+function ashChannelIds(env = process.env) {
+  return String(env.ASH_DISCORD_CHANNELS || "")
+    .split(/[\s,]+/)
+    .map((p) => p.split(/[:=]/)[1])
+    .filter((v) => /^\d{5,30}$/.test(v || ""));
+}
+
+/** Resolve the target: explicit id or the current conversation; must be an Ash channel or a thread under one. */
+export async function resolveReportChannel(requested, currentId, fetchImpl = fetch, env = process.env) {
+  const id = String(requested || currentId || "").replace(/^(discord:|channel:)/, "").trim();
+  if (!/^\d{5,30}$/.test(id)) throw new Error("no Discord channel: pass channel or call from a Discord conversation");
+  const allowed = ashChannelIds(env);
+  if (allowed.includes(id)) return id;
+  const token = String(env.ASH_DISCORD_BOT_TOKEN || "").trim();
+  const res = await fetchImpl(`${DISCORD_API}/channels/${id}`, { headers: { Authorization: `Bot ${token}` }, signal: AbortSignal.timeout(15_000) });
+  const ch = await res.json().catch(() => ({}));
+  if (res.ok && ch.parent_id && allowed.includes(String(ch.parent_id))) return id; // thread in an Ash channel
+  if (res.ok && ch.type === 1) return id; // DM with the Ash bot (allowlisted users only)
+  throw new Error("post_report only posts to the Ash channels, their threads, or the Ash DM");
+}
+
+export async function postReport(params, ctx = {}) {
+  const md = String(params.markdown || "");
+  if (!md.trim()) throw new Error("markdown is required");
+  const bytes = new TextEncoder().encode(md);
+  if (bytes.length > 1_000_000) throw new Error(`report too large (${bytes.length} bytes; max 1 MB) — split it`);
+  let name = String(params.filename || "report.md").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "report.md";
+  if (!/\.(md|txt)$/i.test(name)) name += ".md";
+  const channelId = await resolveReportChannel(params.channel, ctx.nativeChannelId);
+  const summary = String(params.summary || "").trim() || `📄 ${name}`;
+  const token = String(process.env.ASH_DISCORD_BOT_TOKEN || "").trim();
+  if (!token) throw new Error("ASH_DISCORD_BOT_TOKEN is not set");
+  const form = new FormData();
+  form.append("payload_json", JSON.stringify({ content: clip(summary, 1800), allowed_mentions: { parse: [] }, attachments: [{ id: 0, filename: name }] }));
+  form.append("files[0]", new Blob([bytes], { type: "text/markdown; charset=utf-8" }), name);
+  const res = await fetch(`${DISCORD_API}/channels/${channelId}/messages`, { method: "POST", headers: { Authorization: `Bot ${token}` }, body: form, signal: AbortSignal.timeout(60_000) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`discord upload failed: ${res.status} ${scrub(data.message || "")}`);
+  const guild = data.guild_id || String(process.env.ASH_DISCORD_GUILD_ID || "").trim();
+  return {
+    posted: true,
+    channelId,
+    filename: name,
+    bytes: bytes.length,
+    chars: md.length,
+    messageId: data.id,
+    jumpUrl: guild ? `https://discord.com/channels/${guild}/${channelId}/${data.id}` : undefined,
+    fileUrl: data.attachments?.[0]?.url,
+    note: "The file and summary are already posted; reply with at most one short line (or nothing extra).",
+  };
+}
 
 function scrub(text, env = process.env) {
   let out = String(text ?? "");

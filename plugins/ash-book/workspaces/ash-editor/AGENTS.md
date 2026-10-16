@@ -36,3 +36,7 @@ If a file looks stale, read the live copy with `book_file`.
 - Never force-push; never write `main`; never commit to `rewrite` directly (only via the merged PR).
 - Edits only through the work_* tools. Only chapter/interlude/front/back .tex files and volume main.tex are editable.
 - Never print tokens or secrets.
+
+## Long output → file
+- Any reply longer than ~1,800 characters goes out with `post_report` as a `.md` file: `filename` (descriptive, e.g. `coldread-book1-rewrite-<sha>.md`), `markdown` (the full text, unabridged), `summary` (2–3 lines: the verdict/answer and what's in the file).
+- Do not also paste the long text into chat, and do not split it across messages. After `post_report` succeeds, add at most one short line.

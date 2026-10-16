@@ -3,7 +3,7 @@
  * Phase 3 write path: work_* tools edit ash/<slug> branches on book-runner; locks gate commits;
  * pushes are ash/* only; merging into rewrite needs confirm="merge" after Gustavo says so.
  */
-import { ASH_TOOL_NAMES, ASH_WRITE_TOOL_NAMES, executeAshTool } from "./client.mjs";
+import { ASH_REPORT_TOOL, ASH_TOOL_NAMES, ASH_WRITE_TOOL_NAMES, executeAshTool, postReport } from "./client.mjs";
 
 const branch = { type: "string", description: "Git branch (default: rewrite, the canonical branch)." };
 const slug = { type: "string", description: "Work branch slug; the branch is ash/<slug>." };
@@ -105,6 +105,34 @@ export default {
     properties: { runnerUrl: { type: "string" }, buildsChannelId: { type: "string" }, defaultBranch: { type: "string" } },
   },
   register(api) {
+    api.registerTool(
+      (ctx) => ({
+        name: ASH_REPORT_TOOL,
+        description:
+          "Post long output as a .md file attachment in the current Discord conversation (or a named Ash channel/thread), with a short summary as the message text. Use for any reply over ~1,800 characters: cold-read reports, continuity dossiers, diffs, drafts. Max 1 MB.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            filename: { type: "string", description: "e.g. coldread-book1-rewrite-934a65e.md" },
+            markdown: { type: "string", description: "The full report in Markdown." },
+            summary: { type: "string", description: "2-3 line summary posted as the message text." },
+            channel: { type: "string", description: "Optional Discord channel/thread id; defaults to the current conversation." },
+          },
+          required: ["filename", "markdown", "summary"],
+        },
+        async execute(_id, params) {
+          try {
+            const details = await postReport(params || {}, ctx || {});
+            return { content: [{ type: "text", text: JSON.stringify(details) }], details };
+          } catch (err) {
+            const details = { error: err instanceof Error ? err.message : String(err) };
+            return { content: [{ type: "text", text: JSON.stringify(details) }], details, isError: true };
+          }
+        },
+      }),
+      { name: ASH_REPORT_TOOL },
+    );
     const settings = settingsFrom(api);
     for (const name of [...ASH_TOOL_NAMES, ...ASH_WRITE_TOOL_NAMES]) {
       const spec = TOOLS[name];
