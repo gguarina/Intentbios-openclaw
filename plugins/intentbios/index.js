@@ -3,6 +3,7 @@
  * These tools only call Intentbios HTTP. They do not generate lessons.
  */
 import { executeIntentbiosTool, COACH_TOOL_NAMES } from "./client.mjs";
+import { createDiscordLinkHandler, redeemDiscordLink } from "./linkCommand.mjs";
 
 const TOOLS = {
   intent_create: {
@@ -119,6 +120,31 @@ export default {
   },
   register(api) {
     const settings = pluginSettings(api);
+
+    // The bot's half of the Discord ↔ Intentbios pairing. A deterministic
+    // `before_dispatch` hook claims a link attempt (a `/link <code>` message, or
+    // a bare pasted code) and redeems it with the Discord user id off the event
+    // — never a prompt instruction, never the id read from the message text.
+    // Every other message falls through to the normal agent path untouched.
+    if (typeof api.on === "function") {
+      api.on(
+        "before_dispatch",
+        createDiscordLinkHandler({
+          redeem: ({ code, discordUserId }) =>
+            redeemDiscordLink({
+              code,
+              discordUserId,
+              baseUrl: settings.baseUrl,
+              apiKey: process.env.INTENTBIOS_MCP_API_KEY,
+            }),
+          log: (level, message) => {
+            const fn = level === "error" ? console.error : level === "warn" ? console.warn : console.log;
+            fn(`[intentbios] ${message}`);
+          },
+        }),
+      );
+    }
+
     for (const name of COACH_TOOL_NAMES) {
       const spec = TOOLS[name];
       api.registerTool(
