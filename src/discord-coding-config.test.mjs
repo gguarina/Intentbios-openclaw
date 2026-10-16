@@ -78,6 +78,14 @@ test("registers intentbios MCP server", () => {
   assert.deepEqual(mergeIntentbiosMcp({ a: 1 }, {}), { a: 1 });
 });
 
+test("intents prompt asks the tool to write as the linked account", () => {
+  const gg = mergeDiscordConfig({}, { DISCORD_BOT_TOKEN: "x", DISCORD_GUILD_ID: "223456789012345678" })
+    .channels.discord.guilds["223456789012345678"];
+  const prompt = gg.channels["1560230058268827713"].systemPrompt;
+  assert.match(prompt, /linked Intentbios account/);
+  assert.ok(!prompt.includes("user gustavo"));
+});
+
 test("adds MCP Authorization header by env reference only", () => {
   const out = mergeIntentbiosMcp({}, { INTENTBIOS_API_URL: "https://c.example", INTENTBIOS_MCP_API_KEY: "secret-value" });
   assert.equal(out.mcp.servers.intentbios.headers.Authorization, "Bearer ${INTENTBIOS_MCP_API_KEY}");
