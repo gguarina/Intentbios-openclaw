@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import test from "node:test";
 
-import plugin from "./index.js";
+import plugin, { resolveIntentbiosMcpConnection } from "./index.js";
 import { COACH_TOOL_NAMES } from "./client.mjs";
 
 function listen(handler) {
@@ -21,13 +21,32 @@ function listen(handler) {
 function fakeApi(config = {}) {
   const hooks = [];
   const tools = [];
+  const resolvers = [];
   return {
     hooks,
     tools,
+    resolvers,
     pluginConfig: config,
     on: (name, handler, opts) => hooks.push({ name, handler, opts }),
     registerTool: (factory, opts) => tools.push(opts?.name),
+    registerMcpServerConnectionResolver: (resolver) => resolvers.push(resolver),
   };
+}
+
+/** Run fn with a temporary process.env, restoring every touched key after. */
+async function withEnv(overrides, fn) {
+  const keys = ["INTENTBIOS_MCP_URL", "INTENTBIOS_MCP_API_KEY", "INTENTBIOS_MCP_USER_ID"];
+  const before = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+  for (const key of keys) delete process.env[key];
+  Object.assign(process.env, overrides);
+  try {
+    return await fn();
+  } finally {
+    for (const key of keys) {
+      if (before[key] === undefined) delete process.env[key];
+      else process.env[key] = before[key];
+    }
+  }
 }
 
 test("register wires the before_dispatch redeem hook and the coach tools", () => {
@@ -43,6 +62,92 @@ test("register wires the before_dispatch redeem hook and the coach tools", () =>
 test("register does not throw when the host exposes no hook API", () => {
   const api = { pluginConfig: { apiUrl: "https://coachapp.example" }, registerTool() {} };
   plugin.register(api);
+});
+
+test("register binds the intentbios MCP transport to the requester", () => {
+  const api = fakeApi({ apiUrl: "https://coachapp.example" });
+  plugin.register(api);
+  assert.equal(api.resolvers.length, 1);
+  assert.equal(api.resolvers[0].serverName, "intentbios");
+  assert.equal(typeof api.resolvers[0].resolve, "function");
+});
+
+test("resolver writes as the Discord sender's discord:<id> identity", async () => {
+  await withEnv({}, () => {
+    const connection = resolveIntentbiosMcpConnection(
+      { messageChannel: "discord", requesterSenderId: "1560179504196886610" },
+      { baseUrl: "https://coachapp.example" },
+    );
+    assert.equal(connection.url, "https://coachapp.example/mcp");
+    assert.equal(connection.headers["x-user-id"], "discord:1560179504196886610");
+  });
+});
+
+test("resolver normalizes an already-prefixed Discord sender id", async () => {
+  await withEnv({}, () => {
+    const connection = resolveIntentbiosMcpConnection(
+      { messageChannel: "discord", requesterSenderId: "discord:1560179504196886610" },
+      { baseUrl: "https://coachapp.example" },
+    );
+    assert.equal(connection.headers["x-user-id"], "discord:1560179504196886610");
+  });
+});
+
+test("resolver keeps the static identity on a non-Discord channel", async () => {
+  await withEnv({}, () => {
+    const connection = resolveIntentbiosMcpConnection(
+      { messageChannel: "webchat", requesterSenderId: "web-1" },
+      { baseUrl: "https://coachapp.example" },
+    );
+    assert.equal(connection.headers["x-user-id"], "gustavo");
+  });
+});
+
+test("resolver ignores a non-snowflake Discord sender and falls back", async () => {
+  await withEnv({}, () => {
+    const connection = resolveIntentbiosMcpConnection(
+      { messageChannel: "discord", requesterSenderId: "Gustavo" },
+      { baseUrl: "https://coachapp.example" },
+    );
+    assert.equal(connection.headers["x-user-id"], "gustavo");
+  });
+});
+
+test("resolver sends the bot key as a bearer header when configured", async () => {
+  await withEnv({ INTENTBIOS_MCP_API_KEY: "test-bot-key" }, () => {
+    const connection = resolveIntentbiosMcpConnection(
+      { messageChannel: "discord", requesterSenderId: "1560179504196886610" },
+      { baseUrl: "https://coachapp.example" },
+    );
+    assert.equal(connection.headers.Authorization, "Bearer test-bot-key");
+  });
+  await withEnv({}, () => {
+    const without = resolveIntentbiosMcpConnection(
+      { messageChannel: "discord", requesterSenderId: "1560179504196886610" },
+      { baseUrl: "https://coachapp.example" },
+    );
+    assert.equal(without.headers.Authorization, undefined);
+  });
+});
+
+test("resolver honors INTENTBIOS_MCP_URL and the configured default user", async () => {
+  await withEnv({ INTENTBIOS_MCP_URL: "https://mcp.example/mcp" }, () => {
+    const connection = resolveIntentbiosMcpConnection({ messageChannel: "webchat", requesterSenderId: "w" }, {});
+    assert.equal(connection.url, "https://mcp.example/mcp");
+  });
+  await withEnv({}, () => {
+    const configured = resolveIntentbiosMcpConnection(
+      { messageChannel: "webchat", requesterSenderId: "w" },
+      { baseUrl: "https://coachapp.example", defaultUserId: "someone" },
+    );
+    assert.equal(configured.headers["x-user-id"], "someone");
+  });
+});
+
+test("resolver returns null with no base URL so the run omits the server", async () => {
+  await withEnv({}, () => {
+    assert.equal(resolveIntentbiosMcpConnection({ messageChannel: "discord", requesterSenderId: "1" }, {}), null);
+  });
 });
 
 test("the wired hook redeems against the configured URL with the bot key", async () => {

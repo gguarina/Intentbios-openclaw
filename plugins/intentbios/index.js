@@ -3,7 +3,7 @@
  * These tools only call Intentbios HTTP. They do not generate lessons.
  */
 import { executeIntentbiosTool, COACH_TOOL_NAMES } from "./client.mjs";
-import { createDiscordLinkHandler, redeemDiscordLink } from "./linkCommand.mjs";
+import { createDiscordLinkHandler, discordUserIdFromSender, redeemDiscordLink } from "./linkCommand.mjs";
 
 const TOOLS = {
   intent_create: {
@@ -95,6 +95,34 @@ function pluginSettings(api) {
   };
 }
 
+/**
+ * Per-requester transport for the statically declared `intentbios` MCP server.
+ *
+ * A Discord message is sent as the sender's `discord:<snowflake>` identity, so
+ * the Intentbios server's `resolveCoachIdentity` writes as the account that
+ * Discord user paired with. Every other caller (webchat, dashboard) keeps the
+ * configured static `x-user-id`, exactly as before.
+ *
+ * `ctx.requesterSenderId` is host-trusted; the id is never read from the
+ * message body. Returns null when no base URL is configured, which omits the
+ * server for that run instead of connecting somewhere unproven.
+ */
+export function resolveIntentbiosMcpConnection(ctx, settings = {}) {
+  const configured = String(process.env.INTENTBIOS_MCP_URL || settings.baseUrl || "")
+    .trim()
+    .replace(/\/+$/, "");
+  if (!configured) return null;
+  const url = process.env.INTENTBIOS_MCP_URL ? configured : `${configured}/mcp`;
+  const channel = String(ctx?.messageChannel || "").trim().toLowerCase();
+  const discordUserId = channel === "discord" ? discordUserIdFromSender(ctx?.requesterSenderId) : null;
+  const staticUserId =
+    String(settings.defaultUserId || process.env.INTENTBIOS_MCP_USER_ID || "gustavo").trim() || "gustavo";
+  const headers = { "x-user-id": discordUserId ? `discord:${discordUserId}` : staticUserId };
+  const apiKey = String(process.env.INTENTBIOS_MCP_API_KEY || "").trim();
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+  return { url, headers };
+}
+
 function sessionKeyFromContext(ctx, params) {
   return (
     params?.sessionKey ||
@@ -178,6 +206,16 @@ export default {
         }),
         { name },
       );
+    }
+
+    // The `intentbios` MCP server is declared statically (name, tool filter);
+    // this binds its transport to the trusted requester so a Discord message
+    // acts as that sender, not the static user. Older hosts no-op the call.
+    if (typeof api.registerMcpServerConnectionResolver === "function") {
+      api.registerMcpServerConnectionResolver({
+        serverName: "intentbios",
+        resolve: (ctx) => resolveIntentbiosMcpConnection(ctx, settings),
+      });
     }
   },
 };
