@@ -109,12 +109,68 @@ export async function runGolden({ baseline = readBaseline() } = {}) {
   const lat = results.map((r) => r.latencyMs).sort((a, b) => a - b);
   const q = (p) => lat[Math.min(lat.length - 1, Math.floor(p * lat.length))];
   const scores = results.map((r) => r.judge?.score).filter((s) => typeof s === "number");
+  const interpretation = await runInterpretationCases();
   return {
     at: new Date().toISOString(), userId: GOLDEN.userId, turns: results,
     passRate: results.filter((r) => r.pass).length / results.length,
     meanJudge: scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null,
-    p50: q(0.5), p95: q(0.95),
+    p50: q(0.5), p95: q(0.95), interpretation,
   };
+}
+
+// P5.7 — the interpretation layer is SCORED, never asserted. Acquisition is unit-tested against fixtures;
+// the model's structured view is graded here: every fact must cite a page the pipeline held, and the view
+// must carry the expected entities without inventing any. A regression is a drop in passRate.
+export function scoreStructuredView({ review, citations = [], expect = [], mustNotInclude = [], minScore = 0.8 }) {
+  const rows = Array.isArray(review?.rows) ? review.rows : [];
+  if (!rows.length) {
+    return { present: false, pass: false, score: 0, cited: 0, uncited: 0, matched: [], missing: [...expect], invented: [], reasons: ["no view was produced"] };
+  }
+  const allowed = new Set(citations.map(String));
+  const uncited = rows.filter((row) => !allowed.has(String(row.link || ""))).length;
+  const cited = rows.length - uncited;
+  const hay = rows.flatMap((row) => Object.values(row.cells || {})).join(" \u0000 ").toLowerCase();
+  const has = (needle) => hay.includes(String(needle || "").trim().toLowerCase());
+  const matched = expect.filter(has);
+  const missing = expect.filter((needle) => !has(needle));
+  const invented = mustNotInclude.filter(has);
+  const reasons = [];
+  if (uncited) reasons.push(`${uncited} row(s) cite a page the pipeline did not hold`);
+  if (missing.length) reasons.push(`missing expected entities: ${missing.join(", ")}`);
+  if (invented.length) reasons.push(`invented entities: ${invented.join(", ")}`);
+  const score = expect.length ? matched.length / expect.length : 1;
+  const pass = uncited === 0 && invented.length === 0 && missing.length === 0 && score >= minScore;
+  return { present: true, pass, score, cited, uncited, matched, missing, invented, reasons };
+}
+
+/** Replay the interpretation cases against production and grade the rows the find step produced. */
+export async function runInterpretationCases() {
+  const cases = Array.isArray(GOLDEN.interpretation) ? GOLDEN.interpretation : [];
+  const api = String(process.env.INTENTBIOS_API_URL || "").trim().replace(/\/+$/, "");
+  if (!api || !cases.length) return { at: new Date().toISOString(), passRate: null, cases: [] };
+  const headers = { "content-type": "application/json", "x-user-id": GOLDEN.userId };
+  const results = [];
+  for (const c of cases) {
+    let intentId = null, status = 0, reply = "", review = null, citations = [];
+    try {
+      const created = await fetch(`${api}/api/intents`, {
+        method: "POST", headers, body: JSON.stringify({ rawInput: c.rawInput }), signal: AbortSignal.timeout(180_000),
+      });
+      const cj = await created.json().catch(() => ({}));
+      intentId = cj.intentId || null;
+      const r = await fetch(`${api}/api/intents/${intentId}/journey/message`, {
+        method: "POST", headers, body: JSON.stringify({ message: c.message, userId: GOLDEN.userId }), signal: AbortSignal.timeout(180_000),
+      });
+      status = r.status;
+      const j = await r.json().catch(() => ({}));
+      review = j.review || null;
+      reply = String(j.reply || "");
+      citations = (review?.rows || []).map((row) => String(row.link || "")).filter(Boolean);
+    } catch (err) { reply = String(err.message || err); }
+    const score = scoreStructuredView({ review, citations, expect: c.expect, mustNotInclude: c.mustNotInclude, minScore: c.minScore });
+    results.push({ id: c.id, status, intentId, reply: reply.slice(0, 600), citations, ...score });
+  }
+  return { at: new Date().toISOString(), passRate: results.filter((r) => r.pass).length / results.length, cases: results };
 }
 
 export function readBaseline() {
@@ -131,7 +187,10 @@ export function saveRun(run, { asBaseline = false } = {}) {
 
 export function table(run) {
   const rows = run.turns.map((t) => `${t.pass ? "PASS" : "FAIL"} ${t.id.padEnd(14)} ${String(t.latencyMs).padStart(6)}ms judge=${t.judge?.score ?? "-"} ${Object.entries(t.checks).filter(([, v]) => !v).map(([k]) => `!${k}`).join(" ")}`);
-  return [`pass ${(run.passRate * 100).toFixed(0)}% meanJudge=${run.meanJudge?.toFixed(2) ?? "-"} p50=${run.p50}ms p95=${run.p95}ms`, ...rows].join("\n");
+  const interp = run.interpretation?.cases?.length
+    ? ["", `interpretation pass ${run.interpretation.passRate == null ? "-" : `${(run.interpretation.passRate * 100).toFixed(0)}%`}`, ...run.interpretation.cases.map((c) => `${c.pass ? "PASS" : "FAIL"} ${c.id.padEnd(14)} score=${Number(c.score).toFixed(2)} uncited=${c.uncited}${c.reasons.length ? ` (${c.reasons.join("; ")})` : ""}`)]
+    : [];
+  return [`pass ${(run.passRate * 100).toFixed(0)}% meanJudge=${run.meanJudge?.toFixed(2) ?? "-"} p50=${run.p50}ms p95=${run.p95}ms`, ...rows, ...interp].join("\n");
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {

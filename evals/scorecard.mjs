@@ -22,6 +22,15 @@ try {
   if (failed.length) lines.push(`Failing: ${failed.join("; ")}`);
   const filed = fileRunBugs(run, base);
   if (filed.length) lines.push(`#bugs: ${filed.map((f) => `${f.turnId} ${f.action}`).join(", ")}`);
+  const interp = run.interpretation;
+  if (interp?.cases?.length) {
+    const failing = interp.cases.filter((c) => !c.pass);
+    lines.push(`**Interpretation (P5.7)**: pass ${pct(interp.passRate)}${failing.length ? ` — failing: ${failing.map((c) => `${c.id}${c.uncited ? ` !uncited=${c.uncited}` : ""}${c.missing?.length ? ` !missing=${c.missing.join("/")}` : ""}${c.invented?.length ? ` !invented=${c.invented.join("/")}` : ""}`).join("; ")}` : ""}`);
+    const bi = base?.interpretation?.passRate;
+    if (typeof interp.passRate === "number" && typeof bi === "number" && interp.passRate < bi - 0.2) {
+      flags.push(`The interpretation layer (P5.6) dropped from ${pct(bi)} to ${pct(interp.passRate)} — uncited or invented facts. Proposal: inspect the structured view. Not applied; Gustavo decides.`);
+    }
+  }
   if (base && (run.passRate < base.passRate || (run.meanJudge != null && base.meanJudge != null && run.meanJudge < base.meanJudge - 0.5))) {
     flags.push("intentbios-coach quality is below baseline. Proposal: revert intentbios-coach to its previous setting (deepseek-v4-flash, thinking high). Not applied; Gustavo decides.");
   }
