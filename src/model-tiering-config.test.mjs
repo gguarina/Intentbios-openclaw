@@ -32,6 +32,8 @@ test("tiers agents, defaults and planner", () => {
   assert.deepEqual(d.subagents, { model: FLASH, thinking: "off" });
   assert.equal(d.heartbeat.model, FLASH);
   assert.deepEqual([d.compaction.model, d.compaction.thinkingLevel, d.compaction.memoryFlush.model], [FLASH, "off", FLASH]);
+  assert.deepEqual([d.compaction.maxActiveTranscriptBytes, d.compaction.keepRecentTokens], ["1.5mb", 20000]);
+  assert.equal(e.main.subagents.maxChildrenPerAgent, 1);
   assert.match(describeTiers(m), /planner=deepseek\/deepseek-v4-pro\/medium/);
 });
 

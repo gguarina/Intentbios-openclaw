@@ -33,6 +33,9 @@ export function mergeModelTiering(config, { mainWorkspace } = {}) {
   const comp = isObj(defaults.compaction) ? { ...defaults.compaction } : {};
   comp.model = FLASH;
   comp.thinkingLevel = "off";
+  // Compact early so prompts stay well under ~180k tokens (Oct 17 analysis saw a 287k prompt).
+  comp.maxActiveTranscriptBytes = "1.5mb";
+  comp.keepRecentTokens = 20000;
   comp.memoryFlush = { ...(isObj(comp.memoryFlush) ? comp.memoryFlush : {}), model: FLASH };
   defaults.compaction = comp;
   agents.defaults = defaults;
@@ -50,7 +53,8 @@ export function mergeModelTiering(config, { mainWorkspace } = {}) {
     const sub = isObj(entries.main.subagents) ? entries.main.subagents : {};
     entries.main = {
       ...entries.main,
-      subagents: { ...sub, allowAgents: union(sub.allowAgents, [PLANNER_AGENT_ID]), model: FLASH, thinking: "off" },
+      // One active child per main session: plan workers run one at a time on flash/off.
+      subagents: { ...sub, allowAgents: union(sub.allowAgents, [PLANNER_AGENT_ID]), model: FLASH, thinking: "off", maxChildrenPerAgent: 1 },
     };
     // Planner: read-mostly, shares main's workspace so it sees the clones. Never pushes or merges.
     const cur = isObj(entries[PLANNER_AGENT_ID]) ? entries[PLANNER_AGENT_ID] : {};
@@ -79,6 +83,8 @@ export function describeTiers(config) {
   );
   rows.push(`subagents=${d.subagents?.model}/${d.subagents?.thinking}`);
   rows.push(`heartbeat=${d.heartbeat?.model || dm}`);
-  rows.push(`compaction=${d.compaction?.model}/${d.compaction?.thinkingLevel} memoryFlush=${d.compaction?.memoryFlush?.model}`);
+  rows.push(`compaction=${d.compaction?.model}/${d.compaction?.thinkingLevel} maxActiveTranscriptBytes=${d.compaction?.maxActiveTranscriptBytes} keepRecentTokens=${d.compaction?.keepRecentTokens} memoryFlush=${d.compaction?.memoryFlush?.model}`);
+  const ms = config?.agents?.entries?.main?.subagents;
+  if (ms) rows.push(`main.subagents=${ms.model}/${ms.thinking} maxChildrenPerAgent=${ms.maxChildrenPerAgent}`);
   return rows.join(" ");
 }
