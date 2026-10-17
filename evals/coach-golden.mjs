@@ -35,16 +35,19 @@ export function deterministicChecks(turn, out, priorReplies) {
   const summary = String(card.summary || "");
   const replyQuestions = questions(reply);
   const summaryQuestions = questions(summary);
+  const isConditionQuestion = (question) => /\b(?:what|which)\b.+\bshould i use\b/.test(question);
+  const replyConditionQuestions = replyQuestions.filter(isConditionQuestion);
+  const summaryConditionQuestions = summaryQuestions.filter(isConditionQuestion);
   // P10.8: the card and the reply must ask the same condition. Comparing the
   // last question in each (normalized text and condition key) catches the
   // "card asks pets, reply asks size" split on the turn it happens.
-  checks.summaryQuestionMatchesReply = replyQuestions.length === summaryQuestions.length
-    && (
-      replyQuestions.length === 0
-      || (
-        replyQuestions[replyQuestions.length - 1] === summaryQuestions[summaryQuestions.length - 1]
-        && conditionKey(replyQuestions[replyQuestions.length - 1]) === conditionKey(summaryQuestions[summaryQuestions.length - 1])
-      )
+  checks.summaryQuestionMatchesReply = replyConditionQuestions.length === 0
+    || (
+      summaryConditionQuestions.length > 0
+      && replyConditionQuestions[replyConditionQuestions.length - 1]
+        === summaryConditionQuestions[summaryConditionQuestions.length - 1]
+      && conditionKey(replyConditionQuestions[replyConditionQuestions.length - 1])
+        === conditionKey(summaryConditionQuestions[summaryConditionQuestions.length - 1])
     );
   if (turn.expectsStepCoaching) {
     // P10.8: "What should I do on this step?" must say what the step is for
@@ -183,7 +186,20 @@ export async function runGolden({ baseline = readBaseline() } = {}) {
     const turn = fixture.turn;
     const t0 = Date.now();
     let status = 0, out = {};
+    const setupReplies = [];
     try {
+      // P10.8: a case that is about a later turn carries its own setup turns,
+      // on its own fresh intent. The scored turn is then the turn it names,
+      // not always the first turn of a new journey.
+      for (const setupMessage of turn.setup || []) {
+        const setupResponse = await fetch(`${api}/api/openclaw/agents/intentbios-coach/invoke`, {
+          method: "POST", headers: fixture.headers,
+          body: JSON.stringify({ intentId: fixture.intentId, message: setupMessage }),
+          signal: AbortSignal.timeout(180_000),
+        });
+        const setupJson = await setupResponse.json().catch(() => ({}));
+        setupReplies.push(String((normalize(setupJson.output || {})).reply || ""));
+      }
       const r = await fetch(`${api}/api/openclaw/agents/intentbios-coach/invoke`, {
         method: "POST", headers,
         body: JSON.stringify({ intentId: fixture.intentId, message: turn.message }),
@@ -194,7 +210,7 @@ export async function runGolden({ baseline = readBaseline() } = {}) {
       out = normalize(j.output || {});
     } catch (err) { out = { error: String(err.message || err) }; }
     const latencyMs = Date.now() - t0;
-    const checks = status === 200 ? deterministicChecks(turn, out, []) : { http200: false };
+    const checks = status === 200 ? deterministicChecks(turn, out, setupReplies) : { http200: false };
     const base = baseline?.turns?.find((t) => t.id === turn.id);
     const j = status === 200 ? await judge(turn, out.reply, base?.reply).catch((e) => ({ score: null, note: e.message })) : { score: null };
     const detOk = Object.values(checks).every(Boolean);
@@ -203,6 +219,7 @@ export async function runGolden({ baseline = readBaseline() } = {}) {
       id: turn.id, status, latencyMs, intentId: out.intentId || fixture.intentId,
       freshIntent: fixture.intentId, coachedOnFreshIntent: Boolean(ready.ready),
       readyAfterMs: ready.waitedMs ?? null, openNode: ready.openNode || null,
+      setupReplies: setupReplies.map((reply) => reply.slice(0, 400)),
       reply: String(out.reply || out.error || "").slice(0, 2000),
       summary: out.coachCard?.summary || null, deepLink: out.coachCard?.deepLink || null, suggestedReplies: out.coachCard?.suggestedReplies || [],
       path: out.path || null, coachTokens: out.usage || null, checks, judge: j, pass: status === 200 && detOk && judgeOk,
