@@ -107,3 +107,12 @@ test("writeKnowledge creates AGENTS.md", () => {
   const f = writeKnowledge(dir);
   assert.match(fs.readFileSync(f, "utf8"), /intent_muz6fi39_0m1qa2/);
 });
+
+test("thread deletion: channel-delete stays gated by `channels`; moderation/roles stay off; rule in knowledge", () => {
+  const out = mergeDiscordConfig({ channels: { discord: { actions: { channels: false, moderation: true } } } }, { DISCORD_BOT_TOKEN: "x" });
+  assert.deepEqual(out.channels.discord.actions, { messages: true, threads: true, channels: true, roles: false, moderation: false });
+  const kn = fs.readFileSync(new URL("../plugins/main-knowledge/INTENTBIOS.md", import.meta.url), "utf8");
+  assert.match(kn, /1560179504196886610/);
+  assert.match(kn, /never bulk-delete/);
+  assert.match(kn, /Never delete channels or categories/);
+});

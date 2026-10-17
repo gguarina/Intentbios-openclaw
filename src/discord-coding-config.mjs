@@ -61,6 +61,8 @@ export function mergeDiscordConfig(config, env = process.env) {
   if (!next.groupPolicy || next.groupPolicy === "open") next.groupPolicy = "allowlist";
   if (next.allowBots === undefined) next.allowBots = false;
   // Workflow needs threads + channel creation in Gustavo's server; moderation/roles stay off.
+  // Thread/forum-post deletion has no gate of its own in @openclaw/discord: it is `channel-delete` on the
+  // thread id, gated by `channels` (the narrowest setting). Who may ask for it is a knowledge rule.
   next.actions = { ...(isPlainObject(next.actions) ? next.actions : {}), messages: true, threads: true, channels: true, roles: false, moderation: false };
   if (next.configWrites === undefined) next.configWrites = false;
 
