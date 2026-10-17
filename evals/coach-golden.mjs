@@ -10,6 +10,7 @@ export const BASELINE = path.join(EVAL_DIR, "coach-baseline.json");
 const GOLDEN = JSON.parse(fs.readFileSync(fileURLToPath(new URL("./golden.json", import.meta.url)), "utf8"));
 const GENERIC = new Set(["what should i do on this step?", "i'm stuck", "explain this step simply", "i am stuck"]);
 const JUDGE_MODEL = "deepseek-v4-flash";
+const RUN_ID = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
 
 const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9äöüß ]+/g, " ").replace(/\s+/g, " ").trim();
 const questions = (s) => (String(s || "").match(/[^.!?\n]*\?/g) || []).map(norm).filter(Boolean);
@@ -167,17 +168,23 @@ async function waitCoachable(api, headers, intentId, timeoutMs = 300_000) {
 export async function runGolden({ baseline = readBaseline() } = {}) {
   const api = String(process.env.INTENTBIOS_API_URL || "").trim().replace(/\/+$/, "");
   if (!api) throw new Error("INTENTBIOS_API_URL unset");
-  const headers = { "content-type": "application/json", "x-user-id": GOLDEN.userId };
+  // P10.8: a fresh user per case. Intent creation dedupes a similar goal onto
+  // the same intent for one user, so a shared test user can hand a case an
+  // intent that is already many turns deep. A fresh guest store makes the
+  // intent genuinely fresh; `gustavo-test` is still used for the baseline.
+  const headersFor = (userId) => ({ "content-type": "application/json", "x-user-id": userId });
   // P10.8: every case gets its own intent and its own history. No case can
   // inherit another case's splits, asked questions or answered conditions.
   const fixtures = await mapLimit(GOLDEN.turns, 3, async (turn) => {
+    const userId = `guest_p108_${String(turn.id || "case").replace(/[^a-z0-9]/gi, "").toLowerCase()}_${RUN_ID}`;
+    const headers = headersFor(userId);
     const rawInput = turn.createInput || turn.message;
     const created = await createFreshIntent(api, headers, rawInput)
       .catch((err) => ({ status: 0, intentId: null, note: String(err?.message || err) }));
-    return { turn, rawInput, ...created };
+    return { turn, rawInput, userId, headers, ...created };
   });
   const readiness = await mapLimit(fixtures, 3, async (fixture) => (
-    fixture.intentId ? waitCoachable(api, headers, fixture.intentId) : { ready: false }
+    fixture.intentId ? waitCoachable(api, fixture.headers, fixture.intentId) : { ready: false }
   ));
   const results = [];
   for (let index = 0; index < fixtures.length; index++) {
@@ -188,9 +195,8 @@ export async function runGolden({ baseline = readBaseline() } = {}) {
     let status = 0, out = {};
     const setupReplies = [];
     try {
-      // P10.8: a case that is about a later turn carries its own setup turns,
-      // on its own fresh intent. The scored turn is then the turn it names,
-      // not always the first turn of a new journey.
+      // P10.8: a case about a later turn carries its own setup turns, on its
+      // own fresh intent. The scored turn is then the turn it names.
       for (const setupMessage of turn.setup || []) {
         const setupResponse = await fetch(`${api}/api/openclaw/agents/intentbios-coach/invoke`, {
           method: "POST", headers: fixture.headers,
@@ -201,7 +207,7 @@ export async function runGolden({ baseline = readBaseline() } = {}) {
         setupReplies.push(String((normalize(setupJson.output || {})).reply || ""));
       }
       const r = await fetch(`${api}/api/openclaw/agents/intentbios-coach/invoke`, {
-        method: "POST", headers,
+        method: "POST", headers: fixture.headers,
         body: JSON.stringify({ intentId: fixture.intentId, message: turn.message }),
         signal: AbortSignal.timeout(180_000),
       });
@@ -217,6 +223,7 @@ export async function runGolden({ baseline = readBaseline() } = {}) {
     const judgeOk = j.score == null ? true : j.score >= 3 && (base?.judge?.score == null || j.score >= base.judge.score - 1);
     results.push({
       id: turn.id, status, latencyMs, intentId: out.intentId || fixture.intentId,
+      userId: fixture.userId,
       freshIntent: fixture.intentId, coachedOnFreshIntent: Boolean(ready.ready),
       readyAfterMs: ready.waitedMs ?? null, openNode: ready.openNode || null,
       setupReplies: setupReplies.map((reply) => reply.slice(0, 400)),
@@ -231,7 +238,7 @@ export async function runGolden({ baseline = readBaseline() } = {}) {
   const interpretation = await runInterpretationCases();
   const payloadProbe = await runPayloadLeakProbe();
   return {
-    at: new Date().toISOString(), userId: GOLDEN.userId, turns: results,
+    at: new Date().toISOString(), userId: `guest_p108_${RUN_ID}`, turns: results,
     passRate: results.filter((r) => r.pass).length / results.length,
     meanJudge: scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null,
     p50: q(0.5), p95: q(0.95), interpretation, payloadProbe,
@@ -307,9 +314,10 @@ export async function runInterpretationCases() {
   const cases = Array.isArray(GOLDEN.interpretation) ? GOLDEN.interpretation : [];
   const api = String(process.env.INTENTBIOS_API_URL || "").trim().replace(/\/+$/, "");
   if (!api || !cases.length) return { at: new Date().toISOString(), passRate: null, cases: [] };
-  const headers = { "content-type": "application/json", "x-user-id": GOLDEN.userId };
   const results = [];
   for (const c of cases) {
+    const userId = `guest_p108_interp_${String(c.id || "case").replace(/[^a-z0-9]/gi, "").toLowerCase()}_${RUN_ID}`;
+    const headers = { "content-type": "application/json", "x-user-id": userId };
     let intentId = null, status = 0, reply = "", review = null, citations = [];
     try {
       const created = await fetch(`${api}/api/intents`, {
@@ -318,7 +326,7 @@ export async function runInterpretationCases() {
       const cj = await created.json().catch(() => ({}));
       intentId = cj.intentId || null;
       const r = await fetch(`${api}/api/intents/${intentId}/journey/message`, {
-        method: "POST", headers, body: JSON.stringify({ message: c.message, userId: GOLDEN.userId }), signal: AbortSignal.timeout(180_000),
+        method: "POST", headers, body: JSON.stringify({ message: c.message, userId }), signal: AbortSignal.timeout(180_000),
       });
       status = r.status;
       const j = await r.json().catch(() => ({}));
@@ -327,7 +335,7 @@ export async function runInterpretationCases() {
       citations = (review?.rows || []).map((row) => String(row.link || "")).filter(Boolean);
     } catch (err) { reply = String(err.message || err); }
     const score = scoreStructuredView({ review, citations, expect: c.expect, mustNotInclude: c.mustNotInclude, minScore: c.minScore });
-    results.push({ id: c.id, status, intentId, reply: reply.slice(0, 600), citations, ...score });
+    results.push({ id: c.id, userId, status, intentId, reply: reply.slice(0, 600), citations, ...score });
   }
   return { at: new Date().toISOString(), passRate: results.filter((r) => r.pass).length / results.length, cases: results };
 }
