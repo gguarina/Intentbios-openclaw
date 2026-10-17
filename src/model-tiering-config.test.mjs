@@ -33,8 +33,14 @@ test("tiers agents, defaults and planner", () => {
   assert.equal(d.heartbeat.model, FLASH);
   assert.deepEqual([d.compaction.model, d.compaction.thinkingLevel, d.compaction.memoryFlush.model], [FLASH, "off", FLASH]);
   assert.deepEqual([d.compaction.maxActiveTranscriptBytes, d.compaction.keepRecentTokens], ["1.5mb", 20000]);
-  assert.equal(e.main.subagents.maxChildrenPerAgent, 1);
+  assert.equal("maxChildrenPerAgent" in e.main.subagents, false);
   assert.match(describeTiers(m), /planner=deepseek\/deepseek-v4-pro\/medium/);
+});
+
+test("strips invalid per-agent maxChildrenPerAgent", () => {
+  const m = mergeModelTiering({ agents: { entries: { main: { subagents: { maxChildrenPerAgent: 1, allowAgents: ["x"] } } } } });
+  assert.equal("maxChildrenPerAgent" in m.agents.entries.main.subagents, false);
+  assert.ok(m.agents.entries.main.subagents.allowAgents.includes("x"));
 });
 
 test("idempotent and skips absent agents", () => {
