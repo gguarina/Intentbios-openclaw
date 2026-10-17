@@ -754,8 +754,25 @@ async function ensurePlanCap() {
   if (list.code !== 0) return log.error("plan-cap", `automations list failed exit=${list.code}`);
   let jobs = [];
   try { const j = parseJsonOut(list.output); jobs = Array.isArray(j) ? j : j?.jobs || j?.automations || []; } catch { jobs = []; }
-  const job = jobs.find((j) => /autonomous plan/i.test(String(j?.name || "")));
-  if (!job) return log.info("plan-cap", "no 'autonomous plan' automation found; nothing to cap");
+  // Inventory (no payload text): id, name, schedule, kind, model, enabled.
+  for (const j of jobs) {
+    log.info("plan-cap", `job id=${j?.id} name=${JSON.stringify(j?.name || "")} enabled=${j?.enabled} schedule=${JSON.stringify(j?.schedule || {})} kind=${j?.payload?.kind || "-"} model=${j?.payload?.model || "-"} session=${j?.sessionTarget || j?.session || "-"}`);
+  }
+  const PLAN_RE = /autonomous[\s_-]*plan/i;
+  const SKIP_RE = /scorecard|spend guard|re-search/i;
+  const textOf = (j) => String(j?.payload?.message ?? j?.payload?.text ?? "");
+  let job = jobs.find((j) => PLAN_RE.test(String(j?.name || "")));
+  if (!job) {
+    const byText = jobs.filter((j) => !SKIP_RE.test(String(j?.name || "")) && (PLAN_RE.test(textOf(j)) || textOf(j).includes(PLAN_CAP_MARKER)));
+    if (byText.length > 1) log.info("plan-cap", `multiple payload matches: ${byText.map((j) => j.id).join(",")}; capping the first`);
+    job = byText[0];
+  }
+  if (!job) {
+    const hb = path.join(WORKSPACE_DIR, "HEARTBEAT.md");
+    const hbText = fs.existsSync(hb) ? fs.readFileSync(hb, "utf8") : "";
+    const hbCfg = (() => { try { return JSON.parse(fs.readFileSync(configPath(), "utf8"))?.agents?.defaults?.heartbeat || {}; } catch { return {}; } })();
+    return log.info("plan-cap", `no autonomous-plan automation found (jobs=${jobs.length}); heartbeat every=${hbCfg.every || "-"} target=${hbCfg.target || "-"} HEARTBEAT.md mentionsPlan=${PLAN_RE.test(hbText)} bytes=${hbText.length}`);
+  }
   const got = await runCmd(OPENCLAW_NODE, clawArgs(["automations", "get", job.id, "--json"]));
   let full = {};
   try { full = parseJsonOut(got.output) || {}; } catch { full = {}; }
