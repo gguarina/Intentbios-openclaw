@@ -50,11 +50,12 @@ export function mergeModelTiering(config, { mainWorkspace } = {}) {
     entries[id] = cur;
   }
   if (isObj(entries.main)) {
-    const sub = isObj(entries.main.subagents) ? entries.main.subagents : {};
+    // maxChildrenPerAgent is only valid under agents.defaults.subagents (2026.9.4 rejects it per-agent),
+    // so strip it here; the one-worker-at-a-time rule is enforced by evals/plan-gate.mjs (in-flight => may_spawn=false).
+    const { maxChildrenPerAgent: _drop, ...sub } = isObj(entries.main.subagents) ? entries.main.subagents : {};
     entries.main = {
       ...entries.main,
-      // One active child per main session: plan workers run one at a time on flash/off.
-      subagents: { ...sub, allowAgents: union(sub.allowAgents, [PLANNER_AGENT_ID]), model: FLASH, thinking: "off", maxChildrenPerAgent: 1 },
+      subagents: { ...sub, allowAgents: union(sub.allowAgents, [PLANNER_AGENT_ID]), model: FLASH, thinking: "off" },
     };
     // Planner: read-mostly, shares main's workspace so it sees the clones. Never pushes or merges.
     const cur = isObj(entries[PLANNER_AGENT_ID]) ? entries[PLANNER_AGENT_ID] : {};
@@ -85,6 +86,6 @@ export function describeTiers(config) {
   rows.push(`heartbeat=${d.heartbeat?.model || dm}`);
   rows.push(`compaction=${d.compaction?.model}/${d.compaction?.thinkingLevel} maxActiveTranscriptBytes=${d.compaction?.maxActiveTranscriptBytes} keepRecentTokens=${d.compaction?.keepRecentTokens} memoryFlush=${d.compaction?.memoryFlush?.model}`);
   const ms = config?.agents?.entries?.main?.subagents;
-  if (ms) rows.push(`main.subagents=${ms.model}/${ms.thinking} maxChildrenPerAgent=${ms.maxChildrenPerAgent}`);
+  if (ms) rows.push(`main.subagents=${ms.model}/${ms.thinking} oneAtATime=plan-gate`);
   return rows.join(" ");
 }
