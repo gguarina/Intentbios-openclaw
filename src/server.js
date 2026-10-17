@@ -735,6 +735,59 @@ async function ensureEvals() {
   }
 }
 
+// Autonomous-plan cap (approved 2026-10-17): hourly wakes 13:05-18:05 Berlin, gated by a trigger
+// script that runs evals/plan-gate.mjs (window + 3 items/day + one worker at a time), on flash/off.
+const PLAN_CAP_MARKER = "[plan-cap v1]";
+const PLAN_CAP_CRON = "5 13-18 * * *";
+const PLAN_CAP_RULES = `${PLAN_CAP_MARKER} Cost rules (Gustavo, 2026-10-17), these override the plan file:
+- Obey the [plan-gate] line appended below. may_spawn=false: start nothing; only settle the in-flight worker and update the table.
+- may_spawn=true: start at most ONE pending item, and only with sessions_spawn as a subagent (model deepseek/deepseek-v4-flash, thinking off). Never create visible/dashboard sessions for plan workers.
+- Never more than one worker at a time. If anything is unclear, do nothing and stop.`;
+
+function parseJsonOut(out) {
+  const i = out.search(/[[{]/);
+  return i < 0 ? null : JSON.parse(out.slice(i));
+}
+
+async function ensurePlanCap() {
+  const list = await runCmd(OPENCLAW_NODE, clawArgs(["automations", "list", "--json"]));
+  if (list.code !== 0) return log.error("plan-cap", `automations list failed exit=${list.code}`);
+  let jobs = [];
+  try { const j = parseJsonOut(list.output); jobs = Array.isArray(j) ? j : j?.jobs || j?.automations || []; } catch { jobs = []; }
+  const job = jobs.find((j) => /autonomous plan/i.test(String(j?.name || "")));
+  if (!job) return log.info("plan-cap", "no 'autonomous plan' automation found; nothing to cap");
+  const got = await runCmd(OPENCLAW_NODE, clawArgs(["automations", "get", job.id, "--json"]));
+  let full = {};
+  try { full = parseJsonOut(got.output) || {}; } catch { full = {}; }
+  const payload = full.payload || {};
+  const kind = String(payload.kind || "");
+  const text = String(payload.message ?? payload.text ?? "");
+  const evalDir = path.join(WORKSPACE_DIR, "evals");
+  fs.mkdirSync(evalDir, { recursive: true });
+  const orig = path.join(evalDir, "plan-cron-original.json");
+  if (!fs.existsSync(orig)) fs.writeFileSync(orig, JSON.stringify(full, null, 2));
+  const expr = full.schedule?.expr || full.schedule?.cron || "";
+  const hasTrigger = Boolean(full.trigger?.script);
+  if (text.includes(PLAN_CAP_MARKER) && expr === PLAN_CAP_CRON && hasTrigger) {
+    log.info("plan-cap", `already capped id=${job.id} cron="${expr}" tz=${full.schedule?.tz} trigger=yes kind=${kind}`);
+  } else {
+    const base = text.includes(PLAN_CAP_MARKER) ? text : `${text.trim()}\n\n${PLAN_CAP_RULES}`;
+    const args = ["automations", "edit", job.id, "--cron", PLAN_CAP_CRON, "--tz", "Europe/Berlin",
+      "--trigger-script", path.join(EVALS_DIR_APP, "plan-trigger.js")];
+    if (/system/i.test(kind)) args.push("--system-event", base);
+    else args.push("--message", base, "--model", "deepseek/deepseek-v4-flash", "--thinking", "off");
+    const ed = await runCmd(OPENCLAW_NODE, clawArgs(args));
+    log.info("plan-cap", `edit id=${job.id} kind=${kind} exit=${ed.code} ${ed.code ? ed.output.slice(-600) : ""}`);
+  }
+  const after = await runCmd(OPENCLAW_NODE, clawArgs(["automations", "get", job.id, "--json"]));
+  try {
+    const a = parseJsonOut(after.output) || {};
+    log.info("plan-cap", `now id=${job.id} enabled=${a.enabled} schedule=${JSON.stringify(a.schedule)} trigger=${a.trigger?.script ? "plan-gate" : "none"} model=${a.payload?.model || "-"} thinking=${a.payload?.thinking || "-"} capRules=${String(a.payload?.message ?? a.payload?.text ?? "").includes(PLAN_CAP_MARKER)} nextRunAt=${a.state?.nextRunAt || a.nextRunAt || "-"}`);
+  } catch (err) { log.error("plan-cap", `verify parse failed: ${err.message}`); }
+  const gate = await runCmd(process.execPath, [path.join(EVALS_DIR_APP, "plan-gate.mjs"), "status"]);
+  log.info("plan-cap", `gate status ${gate.output.trim().slice(-400)}`);
+}
+
 /** Read-only: log Discord channel status and the bot's permissions in #intents (no secrets printed). */
 async function discordDiagnostics() {
   if (!process.env.DISCORD_BOT_TOKEN?.trim()) return;
@@ -969,6 +1022,7 @@ async function ensureGatewayRunning() {
       }
       ensureEvals().catch((err) => log.error("evals", `setup failed: ${err.message}`));
       discordDiagnostics().catch((err) => log.error("discord-diag", err.message));
+      ensurePlanCap().catch((err) => log.error("plan-cap", err.message));
     })().finally(() => {
       gatewayStarting = null;
     });
