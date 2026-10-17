@@ -1,0 +1,8 @@
+{
+  "id": "plan-cap",
+  "name": "Plan cap",
+  "description": "Caps the autonomous plan: off-peak window, 3 items per Berlin day, one flash/off worker at a time.",
+  "categories": ["other"],
+  "activation": { "onStartup": true },
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+}

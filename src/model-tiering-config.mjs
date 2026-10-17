@@ -5,6 +5,9 @@
 // - intentbios-coach: flash, thinking off
 // - ash-editor: pro (unchanged); ash-coldreader / ash-continuity: flash, thinking off
 // Runs last in the boot merge chain so it wins over earlier modules. intentbios-sophia is never touched.
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 export const FLASH = "deepseek/deepseek-v4-flash"; // legacy id, served by DeepSeek V4.1 Flash at Flash prices
 export const PRO = "deepseek/deepseek-v4-pro";
 export const PLANNER_AGENT_ID = "planner";
@@ -71,7 +74,24 @@ export function mergeModelTiering(config, { mainWorkspace } = {}) {
   }
   if (entries["intentbios-sophia"] !== sophiaBefore) throw new Error("refusing to modify intentbios-sophia");
   agents.entries = entries;
-  return { ...config, agents };
+  return mergePlanCapPlugin({ ...config, agents });
+}
+
+// plan-cap plugin: hard gate on sessions_spawn from the autonomous plan (see plugins/plan-cap).
+export const PLAN_CAP_PLUGIN_ID = "plan-cap";
+const planCapDir = fileURLToPath(new URL("../plugins/plan-cap/", import.meta.url)).replace(/\/$/, "");
+export function mergePlanCapPlugin(config) {
+  const plugins = isObj(config.plugins) ? { ...config.plugins } : {};
+  const load = isObj(plugins.load) ? { ...plugins.load } : {};
+  const paths = Array.isArray(load.paths) ? load.paths : [];
+  load.paths = paths.some((p) => path.resolve(p) === path.resolve(planCapDir)) ? paths : [...paths, planCapDir];
+  plugins.load = load;
+  if (Array.isArray(plugins.allow)) plugins.allow = union(plugins.allow, [PLAN_CAP_PLUGIN_ID]);
+  if (Array.isArray(plugins.deny)) plugins.deny = plugins.deny.filter((p) => p !== PLAN_CAP_PLUGIN_ID);
+  const entries = isObj(plugins.entries) ? { ...plugins.entries } : {};
+  entries[PLAN_CAP_PLUGIN_ID] = { ...(isObj(entries[PLAN_CAP_PLUGIN_ID]) ? entries[PLAN_CAP_PLUGIN_ID] : {}), enabled: true };
+  plugins.entries = entries;
+  return { ...config, plugins };
 }
 
 /** One log line per agent: id -> model / thinking, as resolved from config. */
@@ -86,6 +106,7 @@ export function describeTiers(config) {
   rows.push(`heartbeat=${d.heartbeat?.model || dm}`);
   rows.push(`compaction=${d.compaction?.model}/${d.compaction?.thinkingLevel} maxActiveTranscriptBytes=${d.compaction?.maxActiveTranscriptBytes} keepRecentTokens=${d.compaction?.keepRecentTokens} memoryFlush=${d.compaction?.memoryFlush?.model}`);
   const ms = config?.agents?.entries?.main?.subagents;
-  if (ms) rows.push(`main.subagents=${ms.model}/${ms.thinking} oneAtATime=plan-gate`);
+  if (ms) rows.push(`main.subagents=${ms.model}/${ms.thinking} oneAtATime=plan-cap`);
+  rows.push(`planCapPlugin=${config?.plugins?.entries?.[PLAN_CAP_PLUGIN_ID]?.enabled === true}`);
   return rows.join(" ");
 }

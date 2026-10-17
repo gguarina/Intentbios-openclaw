@@ -739,10 +739,16 @@ async function ensureEvals() {
 // script that runs evals/plan-gate.mjs (window + 3 items/day + one worker at a time), on flash/off.
 const PLAN_CAP_MARKER = "[plan-cap v1]";
 const PLAN_CAP_CRON = "5 13-18 * * *";
+const PLAN_CAP_JOB_NAME = "Autonomous plan (capped)";
+const PLAN_WAKE_TEXT = `Autonomous plan wake. Read /data/workspace/notes/intentbios-autonomous-plan.md (the plan table).
+1. If an item is in-flight, check its worker/PR and update its row (done, blocked, or still in-flight). Ship rules from INTENTBIOS.md apply.
+2. Then, only if the [plan-gate] line says may_spawn=true, start exactly ONE pending item with sessions_spawn and mark it in-flight in the table.
+3. End the turn. Do not post to Discord unless an item finished or is blocked.`;
 const PLAN_CAP_RULES = `${PLAN_CAP_MARKER} Cost rules (Gustavo, 2026-10-17), these override the plan file:
 - Obey the [plan-gate] line appended below. may_spawn=false: start nothing; only settle the in-flight worker and update the table.
 - may_spawn=true: start at most ONE pending item, and only with sessions_spawn as a subagent (model deepseek/deepseek-v4-flash, thinking off). Never create visible/dashboard sessions for plan workers.
-- Never more than one worker at a time. If anything is unclear, do nothing and stop.`;
+- Never more than one worker at a time. If anything is unclear, do nothing and stop.
+- The plan-cap plugin enforces this in code: a blocked sessions_spawn is final for this wake; do not retry or work around it.`;
 
 function parseJsonOut(out) {
   const i = out.search(/[[{]/);
@@ -768,11 +774,27 @@ async function ensurePlanCap() {
     job = byText[0];
   }
   if (!job) {
-    const hb = path.join(WORKSPACE_DIR, "HEARTBEAT.md");
-    const hbText = fs.existsSync(hb) ? fs.readFileSync(hb, "utf8") : "";
-    const hbCfg = (() => { try { return JSON.parse(fs.readFileSync(configPath(), "utf8"))?.agents?.defaults?.heartbeat || {}; } catch { return {}; } })();
-    return log.info("plan-cap", `no autonomous-plan automation found (jobs=${jobs.length}); heartbeat every=${hbCfg.every || "-"} target=${hbCfg.target || "-"} HEARTBEAT.md mentionsPlan=${PLAN_RE.test(hbText)} bytes=${hbText.length}`);
+    // No plan cron exists: the plan chained itself from a dashboard session. Create the capped hourly
+    // wake (13:05-18:05 Berlin, trigger-gated) so the plan resumes each afternoon within the cap.
+    const add = await runCmd(OPENCLAW_NODE, clawArgs(["automations", "add", "--name", PLAN_CAP_JOB_NAME, "--agent", "main",
+      "--session", "isolated", "--cron", PLAN_CAP_CRON, "--tz", "Europe/Berlin",
+      "--trigger-script", path.join(EVALS_DIR_APP, "plan-trigger.js"),
+      "--message", `${PLAN_WAKE_TEXT}\n\n${PLAN_CAP_RULES}`, "--model", "deepseek/deepseek-v4-flash", "--thinking", "off",
+      "--no-deliver", "--json"]));
+    log.info("plan-cap", `no plan automation found (jobs=${jobs.length}); add exit=${add.code} ${add.code ? add.output.slice(-600) : ""}`);
+    if (add.code !== 0) return;
+    let created = {};
+    try { created = parseJsonOut(add.output) || {}; } catch { created = {}; }
+    let id = created.id || created.job?.id;
+    if (!id) {
+      const again = await runCmd(OPENCLAW_NODE, clawArgs(["automations", "list", "--json"]));
+      try { const j = parseJsonOut(again.output); id = (Array.isArray(j) ? j : j?.jobs || j?.automations || []).find((x) => x?.name === PLAN_CAP_JOB_NAME)?.id; } catch { /* ignore */ }
+    }
+    if (!id) return log.error("plan-cap", "created plan automation but could not read its id");
+    job = { id, name: PLAN_CAP_JOB_NAME };
   }
+  fs.mkdirSync(path.join(WORKSPACE_DIR, "evals"), { recursive: true });
+  fs.writeFileSync(path.join(WORKSPACE_DIR, "evals", "plan-cron-id.txt"), String(job.id));
   const got = await runCmd(OPENCLAW_NODE, clawArgs(["automations", "get", job.id, "--json"]));
   let full = {};
   try { full = parseJsonOut(got.output) || {}; } catch { full = {}; }
