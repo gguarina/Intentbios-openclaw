@@ -22,6 +22,19 @@ function startStub({ journey }) {
     for await (const _ of req) { /* drain */ }
     const send = (code, obj) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(obj)); };
     if (req.method === "POST" && req.url === "/api/intents") return send(200, { intentId: "guest_selftest" });
+    // P10.8: the golden harness now waits for the fresh intent to be a
+    // coachable skill-graph journey, so the stub speaks those two reads.
+    if (req.method === "GET" && req.url.includes("/journey-graphs")) {
+      return send(200, {
+        bundle: { goalGraph: { nodes: [{ nodeKey: "n1", metadata: { journeySource: "skill_graph" } }] } },
+        openStep: { nodeKey: "n1" },
+      });
+    }
+    if (req.method === "GET" && req.url.startsWith("/api/intents/")) {
+      return send(200, {
+        graph: { nodes: [{ id: "n1", status: "ready", lessonStatus: "ready", learningMaterial: { generatedBy: "llm" } }] },
+      });
+    }
     if (req.url.includes("/journey/message")) return send(200, journey);
     if (req.url.endsWith("/invoke")) return send(200, { output: { reply: "ok", coachCard: card(journey?.coachCard?.summary || COACHING) } });
     return send(404, {});

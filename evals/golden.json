@@ -1,16 +1,16 @@
 {
   "userId": "gustavo-test",
   "turns": [
-    { "id": "berlin-create", "seq": "berlin", "create": true, "message": "Find an apartment in Berlin", "expectsCondition": true },
-    { "id": "rooms", "seq": "berlin", "message": "3 rooms", "mustNotAsk": "\\brooms?\\b", "expectsCondition": true },
-    { "id": "persons", "seq": "berlin", "message": "3 persons", "mustNotAsk": "\\b(persons?|people|household|family size|how many (of you|people))\\b" },
-    { "id": "what-step", "seq": "berlin", "message": "What should I do on this step?" },
-    { "id": "stuck", "seq": "berlin", "message": "I'm stuck" },
-    { "id": "algebra", "seq": "algebra", "create": true, "message": "Solve 2x + 6 = 14 for x" },
-    { "id": "checklist", "seq": "checklist", "create": true, "message": "Draft a packing checklist for a weekend ski trip" },
-    { "id": "choice", "seq": "choice", "create": true, "message": "Help me choose between a BahnCard 25 and a BahnCard 50" },
-    { "id": "schedule", "seq": "schedule", "create": true, "message": "Schedule a dentist appointment for next week" },
-    { "id": "no-skill", "seq": "noskill", "create": true, "message": "Water the plants on the balcony" }
+    { "id": "berlin-create", "create": true, "message": "Find an apartment in Berlin", "expectsCondition": true },
+    { "id": "rooms", "createInput": "Find an apartment in Berlin", "setup": ["Find an apartment in Berlin"], "message": "3 rooms", "mustNotAsk": "\\brooms?\\b", "expectsCondition": true },
+    { "id": "persons", "createInput": "Find an apartment in Berlin", "setup": ["Find an apartment in Berlin", "3 rooms"], "message": "3 persons", "mustNotAsk": "\\b(persons?|people|household|family size|how many (of you|people))\\b" },
+    { "id": "what-step", "createInput": "Find an apartment in Berlin", "setup": ["Find an apartment in Berlin", "3 rooms"], "message": "What should I do on this step?", "expectsStepCoaching": true, "mustMatch": "search" },
+    { "id": "stuck", "createInput": "Find an apartment in Berlin", "setup": ["Find an apartment in Berlin", "3 rooms"], "message": "I'm stuck" },
+    { "id": "algebra", "create": true, "message": "Solve 2x + 6 = 14 for x" },
+    { "id": "checklist", "create": true, "message": "Draft a packing checklist for a weekend ski trip" },
+    { "id": "choice", "create": true, "message": "Help me choose between a BahnCard 25 and a BahnCard 50" },
+    { "id": "schedule", "create": true, "message": "Schedule a dentist appointment for next week" },
+    { "id": "no-skill", "create": true, "message": "Water the plants on the balcony" }
   ],
   "interpretation": [
     {
