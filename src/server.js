@@ -22,6 +22,7 @@ import {
 import { rebuildForwardedHeaders } from "./proxy-headers.js";
 import { mergeDiscordConfig, mergeIntentbiosMcp, writeCodingSkills, writeKnowledge } from "./discord-coding-config.mjs";
 import { mergeModelTiering, describeTiers } from "./model-tiering-config.mjs";
+import { mergeHeartbeatCadence, describeHeartbeatCadence, describeEverySchedule, HEARTBEAT_EVERY } from "./heartbeat-cadence-config.mjs";
 import { mergeAshBookConfig, syncAshKnowledge, writeAshWorkspaces } from "./ash-book-config.mjs";
 
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
@@ -676,7 +677,7 @@ function syncModelTiering() {
   if (!isConfigured()) return;
   try {
     const current = readConfigJson();
-    const merged = mergeModelTiering(current, { mainWorkspace: WORKSPACE_DIR });
+    const merged = mergeHeartbeatCadence(mergeModelTiering(current, { mainWorkspace: WORKSPACE_DIR }));
     if (!configDeepEqual(current, merged)) {
       const backup = `${configPath()}.bak-tiers-${Date.now()}`;
       fs.copyFileSync(configPath(), backup);
@@ -687,8 +688,24 @@ function syncModelTiering() {
       log.info("tiers", "model tiering already present");
     }
     log.info("tiers", describeTiers(merged));
+    log.info("heartbeat", `cadence ${describeHeartbeatCadence(merged)}`);
   } catch (err) {
     log.error("tiers", `model tiering merge failed; starting gateway anyway: ${err.message}`);
+  }
+}
+
+// Heartbeat monitors are system-owned cron rows that the gateway converges to config on start
+// (see heartbeat-cadence-config.mjs). Read-only check: log each one's schedule and daily fire time.
+async function checkHeartbeatMonitors() {
+  const list = await runCmd(OPENCLAW_NODE, clawArgs(["automations", "list", "--json"]));
+  if (list.code !== 0) return log.error("heartbeat", `automations list failed exit=${list.code}`);
+  let jobs = [];
+  try { const j = parseJsonOut(list.output); jobs = Array.isArray(j) ? j : j?.jobs || j?.automations || []; } catch { jobs = []; }
+  const hb = jobs.filter((j) => j?.payload?.kind === "heartbeat" || /^heartbeat-/.test(String(j?.name || "")));
+  if (!hb.length) return log.info("heartbeat", "no heartbeat monitor jobs");
+  for (const j of hb) {
+    const ok = j?.schedule?.kind === "every" && j.schedule.everyMs === 86_400_000;
+    log.info("heartbeat", `monitor id=${j.id} name=${JSON.stringify(j.name || "")} enabled=${j.enabled} ${describeEverySchedule(j.schedule)}${ok ? "" : ` (expected ${HEARTBEAT_EVERY})`}`);
   }
 }
 
@@ -1062,6 +1079,7 @@ async function ensureGatewayRunning() {
       ensureEvals().catch((err) => log.error("evals", `setup failed: ${err.message}`));
       discordDiagnostics().catch((err) => log.error("discord-diag", err.message));
       ensurePlanCap().catch((err) => log.error("plan-cap", err.message));
+      checkHeartbeatMonitors().catch((err) => log.error("heartbeat", err.message));
     })().finally(() => {
       gatewayStarting = null;
     });
