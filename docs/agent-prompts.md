@@ -15,3 +15,14 @@ The Intentbios app's own model calls (skill graph planner, lesson draft/repair/p
 coach turns, introduction/autostart) are shown per intent in the app: Debug tab → **Agent prompts**
 (system + user prompt, model, thinking, latency, tokens, raw output, check result; last 50 per
 intent, in memory, redacted).
+
+## Discord bridge (figures, equations, Ask sync) and Souls
+
+- `plugins/intentbios/discord-bridge.mjs` + hooks in `plugins/intentbios/index.js`: after an Intentbios tool call in a
+  Discord session, the plugin records the intent → thread mapping (`$OPENCLAW_STATE_DIR/intentbios/discord-threads.json`)
+  and posts the card's figures (title + signed PNG) and display equations as Discord **embeds** right after the agent's
+  reply (`message_sent`, 45 s fallback). Deterministic; the model never writes links or LaTeX.
+- `src/intentbios-bridge-routes.mjs` (gateway bearer only): `POST /intentbios/discord/mirror` posts Ask turns into the
+  intent's thread as "📱 from Ask" over Discord REST — **no agent run, 0 model tokens**; `POST /intentbios/discord/thread`
+  opens a thread in #intents for an intent; `GET /intentbios/souls` returns each agent's SOUL/IDENTITY/AGENTS (knowledge
+  block first)/USER/MEMORY/TOOLS files, redacted (Intentbios Debug → Agent souls).
