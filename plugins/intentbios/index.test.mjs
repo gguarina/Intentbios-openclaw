@@ -53,7 +53,16 @@ test("register wires the before_dispatch redeem hook and the coach tools", () =>
   const api = fakeApi({ apiUrl: "https://coachapp.example" });
   plugin.register(api);
 
-  assert.deepEqual(api.hooks.map((h) => h.name), ["before_dispatch", "after_tool_call", "message_sent"]);
+  assert.deepEqual(api.hooks.map((h) => h.name), [
+    "before_dispatch",
+    "after_tool_call",
+    "message_sent",
+    "after_tool_call",
+    "reply_payload_sending",
+    "message_sent",
+    "before_dispatch",
+    "message_received",
+  ]);
   assert.equal(api.hooks[0].name, "before_dispatch");
   assert.equal(typeof api.hooks[0].handler, "function");
   assert.deepEqual(api.tools.sort(), [...COACH_TOOL_NAMES].sort());

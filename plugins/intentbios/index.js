@@ -13,6 +13,14 @@ import {
   postMessage,
   recordThread,
 } from "./discord-bridge.mjs";
+import {
+  allowedChipUsers,
+  chipLabel,
+  chipSkipReason,
+  disableChipsOnMessage,
+  suggestedRepliesFromCard,
+  withChips,
+} from "./discord-chips.mjs";
 
 const TOOLS = {
   intent_create: {
@@ -210,6 +218,114 @@ export function createDiscordEmbedBridge({
   return { afterToolCall, messageSent, flush, pending };
 }
 
+/**
+ * Suggested-reply chips under coach replies in Discord, attached by code — not by
+ * the model (no tokens).
+ *
+ * `after_tool_call` on an Intentbios tool in a Discord session: remember the card's
+ * suggestedReplies. `reply_payload_sending` (the agent's final reply for that
+ * session): attach them as native Discord buttons (see discord-chips.mjs).
+ * `message_sent`: remember which message carries them. The next inbound message in
+ * that channel — a chip press arrives as one, a typed reply too — disables them.
+ */
+export function createDiscordChipBridge({
+  token = () => process.env.DISCORD_BOT_TOKEN,
+  allowedUsers = () => allowedChipUsers(),
+  disable = disableChipsOnMessage,
+  pendingTtlMs = 15 * 60_000,
+  log = () => {},
+} = {}) {
+  const pending = new Map(); // sessionKey -> { channelId, replies, at }
+  const awaiting = new Map(); // sessionKey -> { channelId, replies, labels, text, at }
+  const active = new Map(); // channelId -> { messageId, labels }
+
+  const fresh = (entry) => entry && Date.now() - entry.at < pendingTtlMs;
+
+  const retire = (channelId, chosenText = "") => {
+    const entry = active.get(channelId);
+    if (!entry) return null;
+    active.delete(channelId);
+    const tok = token();
+    if (!tok) return null;
+    return Promise.resolve()
+      .then(() => disable({ token: tok, channelId, messageId: entry.messageId, labels: entry.labels, chosenText }))
+      .then((res) => {
+        if (res?.changed) log("info", `disabled chips on message ${res.messageId} in ${channelId}`);
+        return res;
+      })
+      .catch((err) => {
+        log("warn", `chip disable failed: ${err instanceof Error ? err.message : String(err)}`);
+        return null;
+      });
+  };
+
+  const afterToolCall = (event, ctx) => {
+    if (!isIntentbiosTool(event?.toolName || ctx?.toolName)) return;
+    const sessionKey = String(ctx?.sessionKey || "");
+    const channelId = discordChannelFromSessionKey(sessionKey);
+    if (!channelId) return;
+    const card = extractCard(event?.result);
+    if (!card) return;
+    const replies = suggestedRepliesFromCard(card);
+    if (replies.length) pending.set(sessionKey, { channelId, replies, at: Date.now() });
+    else pending.delete(sessionKey); // the latest card wins, even when it has none
+  };
+
+  const replyPayloadSending = (event, ctx) => {
+    if (event?.kind && event.kind !== "final") return undefined;
+    const sessionKey = String(event?.sessionKey || ctx?.sessionKey || "");
+    const entry = pending.get(sessionKey);
+    if (!entry) return undefined;
+    if (!fresh(entry)) { pending.delete(sessionKey); return undefined; }
+    const channel = String(event?.channel || ctx?.channelId || "").toLowerCase();
+    if (channel && channel !== "discord") return undefined;
+    const skip = chipSkipReason(event?.payload);
+    if (skip) {
+      log("info", `chips not attached in ${entry.channelId}: ${skip}`);
+      return undefined;
+    }
+    pending.delete(sessionKey);
+    const payload = withChips(event.payload, entry.replies, { allowedUsers: allowedUsers() });
+    awaiting.set(sessionKey, {
+      channelId: entry.channelId,
+      labels: entry.replies.map((text) => chipLabel(text)),
+      text: String(event.payload.text || "").trim(),
+      at: Date.now(),
+    });
+    log("info", `attached ${entry.replies.length} chip(s) to the coach reply in ${entry.channelId}`);
+    return { payload };
+  };
+
+  const messageSent = (event, ctx) => {
+    let sessionKey = String(ctx?.sessionKey || event?.sessionKey || "");
+    if (!awaiting.has(sessionKey)) {
+      const to = String(event?.to || ctx?.conversationId || "");
+      sessionKey = [...awaiting.keys()].find((key) => to && to.includes(awaiting.get(key).channelId)) || "";
+    }
+    const entry = awaiting.get(sessionKey);
+    if (!entry) return;
+    if (event?.success === false) { awaiting.delete(sessionKey); return; }
+    awaiting.delete(sessionKey);
+    const previous = active.get(entry.channelId);
+    const messageId = /^\d{15,25}$/.test(String(event?.messageId || "")) ? String(event.messageId) : null;
+    if (previous && previous.messageId !== messageId) void retire(entry.channelId);
+    active.set(entry.channelId, { messageId, labels: entry.labels });
+  };
+
+  /** Inbound message (typed, or a chip press routed as one): chips above it are spent. */
+  const inbound = (event, ctx) => {
+    const sessionKey = String(event?.sessionKey || ctx?.sessionKey || "");
+    const fromKey = discordChannelFromSessionKey(sessionKey);
+    const conv = String(ctx?.conversationId || "").match(/(?:^|:)(\d{15,25})$/)?.[1] || null;
+    const channelId = fromKey || ((String(ctx?.channelId || event?.channel || "").toLowerCase() === "discord") ? conv : null);
+    if (sessionKey) pending.delete(sessionKey);
+    if (!channelId || !active.has(channelId)) return null;
+    return retire(channelId, String(event?.content || event?.body || ""));
+  };
+
+  return { afterToolCall, replyPayloadSending, messageSent, inbound, pending, awaiting, active };
+}
+
 function sessionKeyFromContext(ctx, params) {
   return (
     params?.sessionKey ||
@@ -266,6 +382,16 @@ export default {
       });
       api.on("after_tool_call", (event, ctx) => bridge.afterToolCall(event, ctx));
       api.on("message_sent", (event, ctx) => bridge.messageSent(event, ctx));
+
+      const chips = createDiscordChipBridge({
+        log: (level, message) => (level === "warn" ? console.warn : console.log)(`[intentbios] ${message}`),
+      });
+      api.on("after_tool_call", (event, ctx) => chips.afterToolCall(event, ctx));
+      api.on("reply_payload_sending", (event, ctx) => chips.replyPayloadSending(event, ctx));
+      api.on("message_sent", (event, ctx) => chips.messageSent(event, ctx));
+      // Fire-and-forget: never hold up dispatch (and never claim the message).
+      api.on("before_dispatch", (event, ctx) => { void chips.inbound(event, ctx); });
+      api.on("message_received", (event, ctx) => { void chips.inbound(event, ctx); });
     }
 
     for (const name of COACH_TOOL_NAMES) {
