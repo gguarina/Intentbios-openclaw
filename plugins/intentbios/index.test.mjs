@@ -59,6 +59,7 @@ test("register wires the before_dispatch redeem hook and the coach tools", () =>
     "message_sent",
     "after_tool_call",
     "reply_payload_sending",
+    "before_tool_call",
     "message_sent",
     "before_dispatch",
     "message_received",
@@ -205,4 +206,18 @@ test("the wired hook leaves an ordinary message alone", async () => {
     ),
     undefined,
   );
+});
+
+test("plugin registered twice (agent-run and delivery hook registries) still attaches chips", () => {
+  const a = fakeApi({ apiUrl: "https://coachapp.example" });
+  const b = fakeApi({ apiUrl: "https://coachapp.example" });
+  plugin.register(a);
+  plugin.register(b);
+  const SESSION = "agent:main:discord:channel:1561999999999999001";
+  const card = { reply: "Try it.", deepLink: "https://x.example/?intentId=i", intentId: "i", suggestedReplies: ["One", "Two"] };
+  const afterA = a.hooks.filter((h) => h.name === "after_tool_call");
+  for (const h of afterA) h.handler({ toolName: "intentbios__journey_message", result: { content: [{ type: "text", text: JSON.stringify(card) }] } }, { sessionKey: SESSION });
+  const replyB = b.hooks.find((h) => h.name === "reply_payload_sending");
+  const res = replyB.handler({ kind: "final", payload: { text: "Try it." }, sessionKey: SESSION, channel: "discord" }, { channelId: "discord" });
+  assert.deepEqual(res.payload.channelData.discord.components.blocks[0].buttons.map((x) => x.label), ["One", "Two"]);
 });

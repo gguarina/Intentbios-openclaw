@@ -197,3 +197,55 @@ test("no chips outside Discord, without suggestions, or on long replies; old chi
   assert.deepEqual(disabled.map((d) => d.messageId), ["1561300000000000010"]);
   assert.equal(bridge.active.get(THREAD).messageId, "1561300000000000011");
 });
+
+test("two hook registries (tool hook on one, delivery hook on the other) share chip state", () => {
+  const store = { pending: new Map(), awaiting: new Map(), active: new Map() };
+  const runRegistry = createDiscordChipBridge({ store, allowedUsers: () => [OWNER] });
+  const deliveryRegistry = createDiscordChipBridge({ store, allowedUsers: () => [OWNER] });
+  runRegistry.afterToolCall({ toolName: "intentbios__journey_message", result: mcpResult(card) }, { sessionKey: SESSION });
+  const res = deliveryRegistry.replyPayloadSending({ kind: "final", payload: { text: "Place 90° on the unit circle." }, sessionKey: SESSION, channel: "discord" }, { channelId: "discord", conversationId: `channel:${THREAD}` });
+  assert.ok(res?.payload?.channelData?.discord?.components, "chips attached across registries");
+});
+
+test("reply hook finds chips by the delivery's conversation when its session key differs", () => {
+  const bridge = createDiscordChipBridge({ allowedUsers: () => [OWNER] });
+  bridge.afterToolCall({ toolName: "intentbios__journey_message", result: mcpResult(card) }, { sessionKey: SESSION });
+  const res = bridge.replyPayloadSending(
+    { kind: "final", payload: { text: "Place 90° on the unit circle." }, sessionKey: "agent:main:main", channel: "discord" },
+    { channelId: "discord", conversationId: `channel:${THREAD}` },
+  );
+  assert.ok(res?.payload?.channelData?.discord?.components);
+});
+
+test("message tool send (thread intro from the #intents session) gets the chips as components", () => {
+  const INTENTS = "1560230058268827713";
+  const NEW_THREAD = "1561344578756542584";
+  const bridge = createDiscordChipBridge({ allowedUsers: () => [OWNER] });
+  const ctx = { sessionKey: `agent:main:discord:channel:${INTENTS}` };
+  bridge.afterToolCall({ toolName: "intentbios__intent_create", result: mcpResult(card) }, ctx);
+  // Not a send (thread-create): untouched, chips stay queued.
+  assert.equal(bridge.beforeToolCall({ toolName: "message", params: { action: "thread-create", channelId: INTENTS, threadName: "x" } }, ctx), undefined);
+  const res = bridge.beforeToolCall({ toolName: "message", params: { action: "send", message: "**Learn SAP** — here's the plan.", target: `channel:${NEW_THREAD}` } }, ctx);
+  assert.equal(res.params.message, "**Learn SAP** — here's the plan.");
+  assert.equal(res.params.target, `channel:${NEW_THREAD}`);
+  const buttons = res.params.components.blocks[0].buttons;
+  assert.deepEqual(buttons.map((b) => b.callbackData), card.suggestedReplies);
+  assert.ok(buttons.every((b) => b.allowedUsers[0] === OWNER));
+  // Consumed: the agent's closing reply in #intents stays plain.
+  assert.equal(bridge.replyPayloadSending({ kind: "final", payload: { text: "Thread ready." }, sessionKey: ctx.sessionKey, channel: "discord" }, ctx), undefined);
+  // The send is tracked against the thread, so the next message there retires the chips.
+  bridge.messageSent({ to: `channel:${NEW_THREAD}`, success: true, messageId: "1561344593356914740" }, ctx);
+  assert.equal(bridge.active.get(NEW_THREAD).messageId, "1561344593356914740");
+});
+
+test("message tool sends that cannot carry chips, or outside Discord sessions, are left alone", () => {
+  const bridge = createDiscordChipBridge({ allowedUsers: () => [OWNER] });
+  const ctx = { sessionKey: SESSION };
+  bridge.afterToolCall({ toolName: "intentbios__journey_message", result: mcpResult(card) }, ctx);
+  assert.equal(bridge.beforeToolCall({ toolName: "message", params: { action: "send", message: "x", target: `channel:${THREAD}`, embeds: [{}] } }, ctx), undefined);
+  assert.equal(bridge.beforeToolCall({ toolName: "message", params: { action: "send", message: "y".repeat(2000), target: `channel:${THREAD}` } }, ctx), undefined);
+  assert.equal(bridge.beforeToolCall({ toolName: "message", params: { action: "send", message: "x" } }, { sessionKey: "agent:main:main" }), undefined);
+  assert.equal(bridge.beforeToolCall({ toolName: "exec", params: { action: "send", message: "x" } }, ctx), undefined);
+  // Still queued for the real reply.
+  assert.ok(bridge.replyPayloadSending({ kind: "final", payload: { text: "ok" }, sessionKey: SESSION, channel: "discord" }, ctx));
+});
