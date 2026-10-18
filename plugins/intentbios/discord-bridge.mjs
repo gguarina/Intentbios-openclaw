@@ -108,8 +108,14 @@ export function extractCard(result, depth = 0) {
   if (depth > 6 || result == null) return null;
   if (typeof result === "string") {
     const text = result.trim();
-    if (!text.startsWith("{") && !text.startsWith("[")) return null;
-    try { return extractCard(JSON.parse(text), depth + 1); } catch { return null; }
+    if (text.startsWith("{") || text.startsWith("[")) {
+      try { return extractCard(JSON.parse(text), depth + 1); } catch { /* fall through */ }
+    }
+    // MCP results rendered as text ("structuredContent:\n{...}"): the JSON object inside.
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start < 0 || end <= start) return null;
+    try { return extractCard(JSON.parse(text.slice(start, end + 1)), depth + 1); } catch { return null; }
   }
   if (typeof result !== "object") return null;
   if (isCard(result)) return result;

@@ -241,6 +241,7 @@ export function sharedBridgeStore() {
     g[SHARED_KEY] = {
       embeds: { pending: new Map(), recent: new Map() },
       chips: { pending: new Map(), awaiting: new Map(), active: new Map() },
+      threadNames: new Map(),
     };
   }
   return g[SHARED_KEY];
@@ -415,6 +416,40 @@ export function createDiscordChipBridge({
   return { afterToolCall, replyPayloadSending, beforeToolCall, messageSent, inbound, pending, awaiting, active };
 }
 
+/**
+ * Thread names for new intents. Intentbios returns `threadName`
+ * ("<intent title> · <intentId>") on the intent_create card; when the agent then
+ * opens the goal's thread with the message tool's `thread-create` in the same
+ * Discord session, that name is used as-is, so Discord, Ask ("open in Discord")
+ * and the intent title always agree, whatever name the model typed.
+ */
+export function createDiscordThreadNameBridge({ store = new Map(), ttlMs = 10 * 60_000, log = () => {} } = {}) {
+  const afterToolCall = (event, ctx) => {
+    const tool = String(event?.toolName || ctx?.toolName || "");
+    if (!isIntentbiosTool(tool) || !/intent_create$/.test(tool)) return;
+    const channelId = discordChannelFromSessionKey(String(ctx?.sessionKey || ""));
+    if (!channelId) return;
+    const card = extractCard(event?.result);
+    const name = String(card?.threadName || "").replace(/\s+/g, " ").trim().slice(0, 100);
+    if (name) store.set(channelId, { name, at: Date.now() });
+  };
+  const beforeToolCall = (event, ctx) => {
+    if (String(event?.toolName || ctx?.toolName || "") !== "message") return undefined;
+    const params = event?.params && typeof event.params === "object" ? event.params : null;
+    if (!params || String(params.action || "") !== "thread-create") return undefined;
+    if (params.channel && String(params.channel).toLowerCase() !== "discord") return undefined;
+    const channelId = discordChannelFromSessionKey(String(ctx?.sessionKey || ""));
+    const entry = channelId ? store.get(channelId) : null;
+    if (!entry) return undefined;
+    store.delete(channelId);
+    if (Date.now() - entry.at > ttlMs) return undefined;
+    if (String(params.threadName || "").trim() === entry.name) return undefined;
+    log("info", `thread name set from the intent: ${entry.name}`);
+    return { params: { ...params, threadName: entry.name } };
+  };
+  return { afterToolCall, beforeToolCall, store };
+}
+
 function sessionKeyFromContext(ctx, params) {
   return (
     params?.sessionKey ||
@@ -481,6 +516,12 @@ export default {
       api.on("after_tool_call", (event, ctx) => chips.afterToolCall(event, ctx));
       api.on("reply_payload_sending", (event, ctx) => chips.replyPayloadSending(event, ctx));
       api.on("before_tool_call", (event, ctx) => chips.beforeToolCall(event, ctx));
+      const threadNames = createDiscordThreadNameBridge({
+        store: shared.threadNames,
+        log: (level, message) => (level === "warn" ? console.warn : console.log)(`[intentbios] ${message}`),
+      });
+      api.on("after_tool_call", (event, ctx) => threadNames.afterToolCall(event, ctx));
+      api.on("before_tool_call", (event, ctx) => threadNames.beforeToolCall(event, ctx));
       api.on("message_sent", (event, ctx) => chips.messageSent(event, ctx));
       // Fire-and-forget: never hold up dispatch (and never claim the message).
       api.on("before_dispatch", (event, ctx) => { void chips.inbound(event, ctx); });
