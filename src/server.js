@@ -24,6 +24,8 @@ import { mergeDiscordConfig, mergeIntentbiosMcp, writeCodingSkills, writeKnowled
 import { mergeModelTiering, describeTiers } from "./model-tiering-config.mjs";
 import { mergeHeartbeatCadence, describeHeartbeatCadence, describeEverySchedule, HEARTBEAT_EVERY } from "./heartbeat-cadence-config.mjs";
 import { mergeAshBookConfig, syncAshKnowledge, writeAshWorkspaces } from "./ash-book-config.mjs";
+import { createIntentbiosBridgeHandler } from "./intentbios-bridge-routes.mjs";
+import { INTENTS_CHANNEL_ID } from "./discord-coding-config.mjs";
 
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
 const STATE_DIR =
@@ -1188,6 +1190,18 @@ function isDashboardPath(p) {
 
 const app = express();
 app.disable("x-powered-by");
+
+// Intentbios ↔ Discord bridge + Debug "Souls" (gateway bearer only). See intentbios-bridge-routes.mjs.
+app.use(createIntentbiosBridgeHandler({
+  isAuthorized: (req) => hasValidGatewayBearer(req.headers.authorization),
+  stateDir: STATE_DIR,
+  workspaceDir: WORKSPACE_DIR,
+  configFile: configPath(),
+  intentsChannelId: String(process.env.DISCORD_INTENTS_CHANNEL_ID || INTENTS_CHANNEL_ID).trim(),
+  // Exact secret values are redacted from persona files (used here only, never returned).
+  secrets: () => [...PROVIDER_ENV_KEYS, "OPENCLAW_GATEWAY_TOKEN", "INTENTBIOS_MCP_API_KEY", "SETUP_PASSWORD"].map((key) => process.env[key]),
+  log: (level, message) => (level === "warn" ? log.warn : log.info)("intentbios-bridge", message),
+}));
 app.use("/setup/api", express.json({ limit: "1mb" }));
 
 app.get("/styles.css", (_req, res) => {

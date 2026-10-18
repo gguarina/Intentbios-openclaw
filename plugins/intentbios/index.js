@@ -4,6 +4,15 @@
  */
 import { executeIntentbiosTool, COACH_TOOL_NAMES } from "./client.mjs";
 import { createDiscordLinkHandler, discordUserIdFromSender, redeemDiscordLink } from "./linkCommand.mjs";
+import {
+  dedupeEmbeds,
+  discordChannelFromSessionKey,
+  embedsForCard,
+  extractCard,
+  isIntentbiosTool,
+  postMessage,
+  recordThread,
+} from "./discord-bridge.mjs";
 
 const TOOLS = {
   intent_create: {
@@ -123,6 +132,84 @@ export function resolveIntentbiosMcpConnection(ctx, settings = {}) {
   return { url, headers };
 }
 
+/**
+ * Figures and equations as Discord embeds, posted by code — not by the model.
+ *
+ * `after_tool_call` on an Intentbios tool in a Discord session: remember the
+ * intent → thread mapping (so Ask turns can mirror there) and stash the card's
+ * figure/equation embeds. `message_sent` for that session (the agent's reply is
+ * out): post the embeds right after it. A fallback timer posts them if no reply
+ * is seen. Bot token from env; never logged.
+ */
+export function createDiscordEmbedBridge({
+  stateDir = process.env.OPENCLAW_STATE_DIR || "",
+  token = () => process.env.DISCORD_BOT_TOKEN,
+  post = postMessage,
+  settleMs = 2_500,
+  fallbackMs = 45_000,
+  log = () => {},
+} = {}) {
+  const pending = new Map(); // sessionKey -> { channelId, embeds, settle, fallback }
+  const recent = new Map(); // channelId|url -> postedAt (no repeat within 2 minutes)
+
+  const flush = async (sessionKey) => {
+    const entry = pending.get(sessionKey);
+    if (!entry) return;
+    pending.delete(sessionKey);
+    clearTimeout(entry.settle);
+    clearTimeout(entry.fallback);
+    const now = Date.now();
+    const embeds = entry.embeds.filter((embed) => (recent.get(`${entry.channelId}|${embed.image.url}`) || 0) < now - 120_000);
+    if (!embeds.length) return;
+    try {
+      await post(token(), entry.channelId, { embeds });
+      for (const embed of embeds) recent.set(`${entry.channelId}|${embed.image.url}`, now);
+      if (recent.size > 500) recent.delete(recent.keys().next().value);
+      log("info", `posted ${embeds.length} embed(s) to discord channel ${entry.channelId}`);
+    } catch (err) {
+      log("warn", `embed post failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  const afterToolCall = (event, ctx) => {
+    if (!isIntentbiosTool(event?.toolName || ctx?.toolName)) return;
+    const sessionKey = String(ctx?.sessionKey || "");
+    const channelId = discordChannelFromSessionKey(sessionKey);
+    if (!channelId) return;
+    const card = extractCard(event?.result);
+    if (!card) return;
+    const intentId = String(card.intentId || event?.params?.intentId || "").trim();
+    if (intentId && stateDir) {
+      try { recordThread(stateDir, intentId, channelId); } catch (err) { log("warn", `thread mapping failed: ${err.message}`); }
+    }
+    const embeds = embedsForCard(card);
+    if (!embeds.length || !token()) return;
+    const entry = pending.get(sessionKey) || { channelId, embeds: [] };
+    entry.embeds = dedupeEmbeds([...entry.embeds, ...embeds]).slice(0, 10);
+    clearTimeout(entry.fallback);
+    entry.fallback = setTimeout(() => void flush(sessionKey), fallbackMs);
+    entry.fallback.unref?.();
+    pending.set(sessionKey, entry);
+  };
+
+  const messageSent = (event, ctx) => {
+    let sessionKey = String(ctx?.sessionKey || event?.sessionKey || "");
+    if (!pending.has(sessionKey)) {
+      // No session on the delivery: match the target channel instead (`to` names it).
+      const to = String(event?.to || ctx?.conversationId || "");
+      sessionKey = [...pending.keys()].find((key) => to && to.includes(pending.get(key).channelId)) || "";
+    }
+    const entry = pending.get(sessionKey);
+    if (!entry || event?.success === false) return;
+    // Settle: a reply can be delivered in several chunks; embeds go after the last.
+    clearTimeout(entry.settle);
+    entry.settle = setTimeout(() => void flush(sessionKey), settleMs);
+    entry.settle.unref?.();
+  };
+
+  return { afterToolCall, messageSent, flush, pending };
+}
+
 function sessionKeyFromContext(ctx, params) {
   return (
     params?.sessionKey ||
@@ -171,6 +258,14 @@ export default {
           },
         }),
       );
+    }
+
+    if (typeof api.on === "function") {
+      const bridge = createDiscordEmbedBridge({
+        log: (level, message) => (level === "warn" ? console.warn : console.log)(`[intentbios] ${message}`),
+      });
+      api.on("after_tool_call", (event, ctx) => bridge.afterToolCall(event, ctx));
+      api.on("message_sent", (event, ctx) => bridge.messageSent(event, ctx));
     }
 
     for (const name of COACH_TOOL_NAMES) {
