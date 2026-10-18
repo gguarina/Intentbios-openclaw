@@ -114,6 +114,8 @@ Need help? [Request support on Railway Station](https://station.railway.com/all-
 
 ## Discord + coding setup (Intentbios fork)
 
+Where each agent's prompt comes from (main, planner, intentbios-coach): [docs/agent-prompts.md](docs/agent-prompts.md).
+
 On boot (`src/discord-coding-config.mjs`, `syncDiscordAndCoding` in `src/server.js`):
 
 - If `DISCORD_BOT_TOKEN` is set: installs the pinned `@openclaw/discord` plugin (matching the OpenClaw version)
