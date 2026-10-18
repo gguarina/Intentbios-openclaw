@@ -89,6 +89,17 @@ test("thread: opens one thread in #intents, posts the conversation, records the 
   } finally { await h.close(); }
 });
 
+test("thread: named with Intentbios' threadName when sent", async () => {
+  const h = await harness();
+  try {
+    const threadName = "Learn trigonometry · intent_named";
+    const opened = await h.call("POST", "/intentbios/discord/thread", { intentId: "intent_named", title: "Learn trigonometry", threadName, turns });
+    assert.equal(opened.status, 200);
+    assert.deepEqual(h.threads, [{ parent: "1560230058268827713", name: threadName }]);
+    assert.match(h.posts[0].body.content, /\*\*Learn trigonometry\*\* · intent `intent_named`/);
+  } finally { await h.close(); }
+});
+
 test("souls: persona files per agent, knowledge block first, secrets redacted", async () => {
   const h = await harness();
   try {

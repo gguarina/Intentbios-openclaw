@@ -148,9 +148,11 @@ export function createIntentbiosBridgeHandler({
     if (!token()) return [503, { error: "Discord is not configured" }];
     if (!intentsChannelId) return [503, { error: "No #intents channel configured" }];
     const title = String(body?.title || intentId).replace(/\s+/g, " ").trim().slice(0, 90);
+    // Intentbios sends "<title> · <intentId>", the name the coach uses for threads it opens.
+    const threadName = String(body?.threadName || "").replace(/\s+/g, " ").trim().slice(0, 100) || title;
     const turns = cleanTurns(body?.turns);
     try {
-      const thread = await newThread(token(), intentsChannelId, title);
+      const thread = await newThread(token(), intentsChannelId, threadName);
       const url = thread.guild_id ? `https://discord.com/channels/${thread.guild_id}/${thread.id}` : null;
       recordThread(stateDir, intentId, thread.id, { source: "ask", url });
       await post(token(), thread.id, {

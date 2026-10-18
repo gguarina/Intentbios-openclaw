@@ -249,3 +249,20 @@ test("message tool sends that cannot carry chips, or outside Discord sessions, a
   // Still queued for the real reply.
   assert.ok(bridge.replyPayloadSending({ kind: "final", payload: { text: "ok" }, sessionKey: SESSION, channel: "discord" }, ctx));
 });
+
+test("intent_create's threadName names the thread the agent opens next", async () => {
+  const { createDiscordThreadNameBridge } = await import("./index.js");
+  const tn = createDiscordThreadNameBridge();
+  const ctx = { sessionKey: "agent:main:discord:channel:1560230058268827713" };
+  const card = { reply: "r", summary: "s", deepLink: "https://x", suggestedReplies: ["a", "b"], intentId: "intent_mvdkol18_xtnuyd", threadName: "Learn to read sheet music for piano · intent_mvdkol18_xtnuyd" };
+  // MCP result rendered as text, as OpenClaw shows it.
+  tn.afterToolCall({ toolName: "intentbios__intent_create", result: { content: [{ type: "text", text: `structuredContent:\n${JSON.stringify(card)}` }] } }, ctx);
+  const out = tn.beforeToolCall({ toolName: "message", params: { action: "thread-create", channelId: "1560230058268827713", threadName: "Learn Read Sheet Music · intent_mvdkol18_xtnuyd" } }, ctx);
+  assert.equal(out.params.threadName, card.threadName);
+  assert.equal(out.params.channelId, "1560230058268827713");
+  // Used once; other actions and other sessions untouched.
+  assert.equal(tn.beforeToolCall({ toolName: "message", params: { action: "thread-create", threadName: "x" } }, ctx), undefined);
+  tn.afterToolCall({ toolName: "intentbios__intent_create", result: { structuredContent: card } }, ctx);
+  assert.equal(tn.beforeToolCall({ toolName: "message", params: { action: "send", message: "hi" } }, ctx), undefined);
+  assert.equal(tn.beforeToolCall({ toolName: "message", params: { action: "thread-create", threadName: "x" } }, { sessionKey: "agent:main:discord:channel:1561297516228648994" }), undefined);
+});

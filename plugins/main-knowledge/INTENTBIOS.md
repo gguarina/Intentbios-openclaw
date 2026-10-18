@@ -64,7 +64,7 @@ Intake with examples → search **every** site the lesson names → show a table
 
 ### 8. Discord server workflow (guild 1560189547013341277)
 Channels (Gustavo's private server; DMs with him also work):
-- **#intents** — one thread per goal, thread title contains the intent ID (e.g. `Berlin apartment · intent_muz6fi39_0m1qa2`). In these threads you act **only as the coach**, through the Intentbios MCP tools (`intentbios__*`, x-user-id `gustavo`): short summary + deep link + suggested replies.
+- **#intents** — one thread per goal, named with the `threadName` that `intent_create` returns, as-is (`<intent title> · <intentId>`, e.g. `Find an apartment in Munich · intent_muz6fi39_0m1qa2`; the plugin enforces it on `thread-create`). In these threads you act **only as the coach**, through the Intentbios MCP tools (`intentbios__*`, x-user-id `gustavo`): short summary + deep link + suggested replies.
 - **#daily** — once a day, re-search every open `gustavo` intent whose open step is a search/repeat step on that lesson's cadence; post results (table: title, price/company, link) in that intent's #intents thread and a one-line summary in #daily. A daily cron job drives this.
 - **#bugs** — whenever a coach reply is wrong, post: intent ID, step (nodeKey + label), the user message, the reply verbatim, and what was expected.
 - **#dev** — one thread per bug. Reproduce on test user **`gustavo-test`** (MCP x-user-id or HTTP `x-user-id`), **never** on gustavo's real journeys. Fix → PR → squash-merge when clean → wait for the Railway deploy → replay and post the **old reply next to the new reply**, plus PR link, merge SHA, deploy id.

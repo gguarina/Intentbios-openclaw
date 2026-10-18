@@ -60,6 +60,8 @@ test("register wires the before_dispatch redeem hook and the coach tools", () =>
     "after_tool_call",
     "reply_payload_sending",
     "before_tool_call",
+    "after_tool_call",
+    "before_tool_call",
     "message_sent",
     "before_dispatch",
     "message_received",
