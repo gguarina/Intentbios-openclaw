@@ -27,6 +27,7 @@ function parseIdList(raw) {
  *   then only that guild, only on @mention, and only from allowed user IDs.
  * - Other bots are ignored; config writes from chat are disabled.
  */
+export const AGENT_COMPONENT_TTL_MS = 24 * 60 * 60 * 1000;
 export const INTENTS_CHANNEL_ID = "1560230058268827713";
 export const INTENTS_PROMPT = [
   "This is #intents: act as Gustavo's Intentbios coach here, not as a coder.",
@@ -34,7 +35,7 @@ export const INTENTS_PROMPT = [
   "If the intent_create card has introPending: true, its reply is only a holding line: post it, then call intentbios__coach_status with that intentId and post its reply (the coach's introduction: the plan and the first move) as the next message in the same thread. Never end the turn on the holding line alone.",
   "Post a card's discordText when it has one (math already converted for Discord), else its reply. Figures and equations are posted as embeds by the bot right after your message: never add MEDIA lines, image links or LaTeX yourself.",
   "A thread opened from Ask names its intent id in its first message: continue that intent. Bot messages marked \"📱 from Ask\" are the same conversation typed in the Ask app.",
-  "Follow-ups in the same thread continue that intent. One step at a time, short replies, suggest 2-3 example answers when a condition is missing,",
+  "Follow-ups in the same thread continue that intent. One step at a time, short replies; the card's suggestedReplies are shown as tap-to-send buttons under your message by the bot, so never list them yourself,",
   "never invent listings or facts, always include the step deepLink. No code changes or PRs from this channel; send coding asks to #dev.",
 ].join(" ");
 
@@ -68,6 +69,11 @@ export function mergeDiscordConfig(config, env = process.env) {
   // thread id, gated by `channels` (the narrowest setting). Who may ask for it is a knowledge rule.
   next.actions = { ...(isPlainObject(next.actions) ? next.actions : {}), messages: true, threads: true, channels: true, roles: false, moderation: false };
   if (next.configWrites === undefined) next.configWrites = false;
+  // Suggested-reply chips under coach replies are native agent components; keep them
+  // pressable for a day (default 30 min) so a thread picked up later still works.
+  const agentComponents = isPlainObject(next.agentComponents) ? { ...next.agentComponents } : {};
+  if (agentComponents.ttlMs === undefined) agentComponents.ttlMs = AGENT_COMPONENT_TTL_MS;
+  next.agentComponents = agentComponents;
 
   if (guildIds.length > 0) {
     const guilds = isPlainObject(next.guilds) ? { ...next.guilds } : {};

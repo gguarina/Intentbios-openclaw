@@ -116,3 +116,10 @@ test("thread deletion: channel-delete stays gated by `channels`; moderation/role
   assert.match(kn, /never bulk-delete/);
   assert.match(kn, /Never delete channels or categories/);
 });
+
+test("agent components (suggested-reply chips) stay pressable for a day; an explicit TTL wins", () => {
+  const env = { DISCORD_BOT_TOKEN: "x" };
+  assert.equal(mergeDiscordConfig({}, env).channels.discord.agentComponents.ttlMs, 86_400_000);
+  const kept = mergeDiscordConfig({ channels: { discord: { agentComponents: { ttlMs: 60_000, enabled: true } } } }, env);
+  assert.deepEqual(kept.channels.discord.agentComponents, { ttlMs: 60_000, enabled: true });
+});
