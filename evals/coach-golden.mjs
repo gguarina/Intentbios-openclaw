@@ -309,6 +309,64 @@ export function scoreStructuredView({ review, citations = [], expect = [], mustN
   return { present: true, pass, score, cited, uncited, matched, missing, invented, reasons };
 }
 
+/**
+ * P13b: the find step asks one contract condition per turn before its search
+ * skill may run (`run_skill` is refused while any condition is missing), so a
+ * single message can never reach the rows — it only gets the first ask. The
+ * eval answers the step's own contract: one labelled value per turn, using the
+ * contract's example (`size: 70 m2`), which is the shape `conditionValue`
+ * reads and the shape a person naturally types. Then it asks for the search.
+ *
+ * `/journey/search` is not the rows path: `searchOpenIntent` builds no review
+ * block and the route never serializes `review`. For a housing find the rows
+ * come from the portal crawl (`housingFindFromSites`), not from
+ * `rowsFromInterpretedView`; the model's structured view is the non-housing
+ * find path. This case grades whichever block the find step actually returned.
+ */
+async function openStepContract(api, headers, intentId, timeoutMs = 150_000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const r = await fetch(`${api}/api/intents/${encodeURIComponent(intentId)}`, { headers, signal: AbortSignal.timeout(120_000) });
+    const intent = await r.json().catch(() => ({}));
+    const open = (intent.graph?.nodes || []).find((node) => node.status === "ready" || node.status === "in_progress");
+    const block = (String(open?.summary || "").match(/```intentbios-contract\s*([\s\S]*?)```/) || [])[1];
+    if (block) {
+      try { return JSON.parse(block); } catch { return null; }
+    }
+    await sleep(5_000);
+  }
+  return null;
+}
+
+async function driveFindStep({ api, headers, userId, intentId, message, contract, maxTurns = 10 }) {
+  const answers = [];
+  const send = async (text) => {
+    const r = await fetch(`${api}/api/intents/${intentId}/journey/message`, {
+      method: "POST", headers, body: JSON.stringify({ message: text, userId }), signal: AbortSignal.timeout(180_000),
+    });
+    const j = await r.json().catch(() => ({}));
+    return { status: r.status, reply: String(j.reply || j.error || ""), review: j.review || null, card: j.coachCard || null, action: j.coachTurn?.action || null };
+  };
+  let turn = await send(message);
+  const hasRows = () => Boolean((turn.review?.rows || []).length);
+  const speak = async (text) => {
+    if (answers.length >= maxTurns) return;
+    answers.push(text);
+    turn = await send(text);
+  };
+  for (const condition of contract?.conditions || []) {
+    if (hasRows() || answers.length >= maxTurns) break;
+    const value = String(condition?.example || "").trim();
+    if (condition?.name && value) await speak(`${condition.name}: ${value}`);
+  }
+  const sites = Array.isArray(contract?.sites) ? contract.sites.filter(Boolean) : [];
+  for (const nudge of ["Run the search now.", sites.length ? `Run the search on ${sites.join(" and ")} now.` : null]) {
+    if (hasRows() || !nudge) break;
+    await speak(nudge);
+  }
+  return { ...turn, answers };
+}
+
 /** Replay the interpretation cases against production and grade the rows the find step produced. */
 export async function runInterpretationCases() {
   const cases = Array.isArray(GOLDEN.interpretation) ? GOLDEN.interpretation : [];
@@ -318,26 +376,36 @@ export async function runInterpretationCases() {
   for (const c of cases) {
     const userId = `guest_p108_interp_${String(c.id || "case").replace(/[^a-z0-9]/gi, "").toLowerCase()}_${RUN_ID}`;
     const headers = { "content-type": "application/json", "x-user-id": userId };
-    let intentId = null, status = 0, reply = "", review = null, citations = [];
+    let intentId = null, status = 0, reply = "", review = null, citations = [], answers = [];
     try {
       const created = await fetch(`${api}/api/intents`, {
         method: "POST", headers, body: JSON.stringify({ rawInput: c.rawInput }), signal: AbortSignal.timeout(180_000),
       });
       const cj = await created.json().catch(() => ({}));
       intentId = cj.intentId || null;
-      const r = await fetch(`${api}/api/intents/${intentId}/journey/message`, {
-        method: "POST", headers, body: JSON.stringify({ message: c.message, userId }), signal: AbortSignal.timeout(180_000),
-      });
-      status = r.status;
-      const j = await r.json().catch(() => ({}));
-      review = j.review || null;
-      reply = String(j.reply || "");
+      if (!intentId) throw new Error(`intake returned no intentId: ${JSON.stringify(cj).slice(0, 200)}`);
+      const contract = await openStepContract(api, headers, intentId).catch(() => null);
+      const driven = await driveFindStep({ api, headers, userId, intentId, message: c.message, contract });
+      status = driven.status;
+      review = driven.review;
+      reply = driven.reply;
+      answers = driven.answers;
       citations = (review?.rows || []).map((row) => String(row.link || "")).filter(Boolean);
     } catch (err) { reply = String(err.message || err); }
     const score = scoreStructuredView({ review, citations, expect: c.expect, mustNotInclude: c.mustNotInclude, minScore: c.minScore });
-    results.push({ id: c.id, userId, status, intentId, reply: reply.slice(0, 600), citations, ...score });
+    results.push({ id: c.id, userId, status, intentId, answers, reply: reply.slice(0, 600), citations, ...score });
   }
   return { at: new Date().toISOString(), passRate: results.filter((r) => r.pass).length / results.length, cases: results };
+}
+
+/** The per-case lines the scorecard prints, shared by the full run and `--interpretation`. */
+export function interpretationLines(interpretation) {
+  return interpretation?.cases?.length
+    ? [
+      `interpretation pass ${interpretation.passRate == null ? "-" : `${(interpretation.passRate * 100).toFixed(0)}%`}`,
+      ...interpretation.cases.map((c) => `${c.pass ? "PASS" : "FAIL"} ${c.id.padEnd(14)} score=${Number(c.score).toFixed(2)} uncited=${c.uncited}${c.reasons.length ? ` (${c.reasons.join("; ")})` : ""}`),
+    ]
+    : [];
 }
 
 export function readBaseline() {
@@ -354,15 +422,21 @@ export function saveRun(run, { asBaseline = false } = {}) {
 
 export function table(run) {
   const rows = run.turns.map((t) => `${t.pass ? "PASS" : "FAIL"} ${t.id.padEnd(14)} ${String(t.latencyMs).padStart(6)}ms judge=${t.judge?.score ?? "-"} ${Object.entries(t.checks).filter(([, v]) => !v).map(([k]) => `!${k}`).join(" ")}`);
-  const interp = run.interpretation?.cases?.length
-    ? ["", `interpretation pass ${run.interpretation.passRate == null ? "-" : `${(run.interpretation.passRate * 100).toFixed(0)}%`}`, ...run.interpretation.cases.map((c) => `${c.pass ? "PASS" : "FAIL"} ${c.id.padEnd(14)} score=${Number(c.score).toFixed(2)} uncited=${c.uncited}${c.reasons.length ? ` (${c.reasons.join("; ")})` : ""}`)]
-    : [];
-  return [`pass ${(run.passRate * 100).toFixed(0)}% meanJudge=${run.meanJudge?.toFixed(2) ?? "-"} p50=${run.p50}ms p95=${run.p95}ms`, ...rows, ...interp].join("\n");
+  const interp = interpretationLines(run.interpretation);
+  return [`pass ${(run.passRate * 100).toFixed(0)}% meanJudge=${run.meanJudge?.toFixed(2) ?? "-"} p50=${run.p50}ms p95=${run.p95}ms`, ...rows, ...(interp.length ? ["", ...interp] : [])].join("\n");
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+  // P13b: `--interpretation` runs only the interpretation cases, so the scored
+  // layer can be re-measured without paying for the whole golden set.
+  if (process.argv.includes("--interpretation")) {
+    const interpretation = await runInterpretationCases();
+    console.log(interpretation.cases.map((c) => `${c.id} intent=${c.intentId} answers=${JSON.stringify(c.answers)}\n  last reply: ${c.reply}`).join("\n"));
+    console.log(interpretationLines(interpretation).join("\n"));
+  } else {
   const asBaseline = process.argv.includes("--baseline");
   const run = await runGolden({ baseline: asBaseline ? null : readBaseline() });
   const file = saveRun(run, { asBaseline });
   console.log(`[evals] ${asBaseline ? "baseline" : "run"} saved ${file}\n${table(run)}`);
+  }
 }
