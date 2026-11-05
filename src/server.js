@@ -27,10 +27,13 @@ import { mergeAshBookConfig, syncAshKnowledge, writeAshWorkspaces } from "./ash-
 import { createIntentbiosBridgeHandler } from "./intentbios-bridge-routes.mjs";
 import { INTENTS_CHANNEL_ID } from "./discord-coding-config.mjs";
 import {
+  MAIN_AGENT_ID,
   PROVIDER_ENV_KEYS,
+  agentIdsFromConfig,
   buildDeepseekPastePlans,
   buildProviderEnvFile,
   deepseekApiKeyProfileIdsFromConfig,
+  deepseekAuthListArgs,
   deliverSpawnInput,
   formatCommandLog,
   parseDeepseekAuthList,
@@ -342,51 +345,49 @@ async function syncProviderEnvSecrets() {
 
 /**
  * Replace stored DeepSeek api_key profiles with process.env.DEEPSEEK_API_KEY.
- * `config set env.DEEPSEEK_API_KEY` is an unknown path on OpenClaw 2026.9.4
- * (`env` only has `shellEnv` and `vars`) and exits 1 every boot. The stored
- * profile wins over that env var anyway, so the key is pasted into the auth store.
- * The key is stdin only; logs keep the exit code and a truncated stderr tail.
+ * Multiple agents make `models auth` exit 1 unless `--agent` is set. Paste `main`
+ * on every boot, and any other agent whose auth list shows a DeepSeek api_key profile.
+ * The key is stdin only. Logs are exit codes.
  */
 async function syncDeepseekAuthProfile() {
   const secret = String(process.env.DEEPSEEK_API_KEY || "").trim();
   if (!secret) return;
 
-  const listResult = await runCmd(
-    OPENCLAW_NODE,
-    clawArgs(["models", "auth", "list", "--provider", "deepseek", "--json"]),
-  );
-  const list = listResult.code === 0
-    ? parseDeepseekAuthList(listResult.stdout)
-    : { ok: false, ids: [] };
-  let configProfileIds = [];
+  let config = {};
   try {
-    configProfileIds = deepseekApiKeyProfileIdsFromConfig(readConfigJson());
+    config = readConfigJson();
   } catch (err) {
-    log.warn("env-sync", `could not read auth.profiles: ${err.message}`);
+    log.warn("env-sync", `could not read openclaw.json: ${err.message}`);
   }
-  if (!list.ok) {
-    log.warn(
-      "env-sync",
-      `${formatCommandLog({
-        label: "models auth list --provider deepseek",
-        code: listResult.code,
-        stderr: listResult.code === 0 ? "profile list unreadable" : listResult.stderr,
-        secrets: [secret],
-      })}; refreshing saved DeepSeek api_key profiles from env`,
-    );
-  }
+  const configProfileIds = deepseekApiKeyProfileIdsFromConfig(config);
 
-  const plans = buildDeepseekPastePlans({ secret, list, configProfileIds });
-  for (const plan of plans) {
-    const result = await runCmd(OPENCLAW_NODE, clawArgs(plan.args), { input: plan.stdin });
-    const line = formatCommandLog({
-      label: plan.logLabel,
-      code: result.code,
-      stderr: result.stderr,
-      secrets: [secret],
+  for (const agentId of agentIdsFromConfig(config)) {
+    const listLabel = `models auth list --provider deepseek --agent ${agentId}`;
+    const listResult = await runCmd(OPENCLAW_NODE, clawArgs(deepseekAuthListArgs(agentId)));
+    const listLine = formatCommandLog({ label: listLabel, code: listResult.code });
+    if (listResult.code === 0) log.info("env-sync", listLine);
+    else log.warn("env-sync", listLine);
+
+    const list = listResult.code === 0
+      ? parseDeepseekAuthList(listResult.stdout)
+      : { ok: false, ids: [] };
+    if (listResult.code === 0 && !list.ok) {
+      log.warn("env-sync", `${listLabel} exit=0 profile-list-unreadable`);
+    }
+
+    const plans = buildDeepseekPastePlans({
+      secret,
+      agentId,
+      list,
+      configProfileIds,
+      always: agentId === MAIN_AGENT_ID,
     });
-    if (result.code === 0) log.info("env-sync", line);
-    else log.warn("env-sync", line);
+    for (const plan of plans) {
+      const result = await runCmd(OPENCLAW_NODE, clawArgs(plan.args), { input: plan.stdin });
+      const line = formatCommandLog({ label: plan.logLabel, code: result.code });
+      if (result.code === 0) log.info("env-sync", line);
+      else log.warn("env-sync", line);
+    }
   }
 }
 
