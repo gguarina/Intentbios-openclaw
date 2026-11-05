@@ -26,6 +26,15 @@ import { mergeHeartbeatCadence, describeHeartbeatCadence, describeEverySchedule,
 import { mergeAshBookConfig, syncAshKnowledge, writeAshWorkspaces } from "./ash-book-config.mjs";
 import { createIntentbiosBridgeHandler } from "./intentbios-bridge-routes.mjs";
 import { INTENTS_CHANNEL_ID } from "./discord-coding-config.mjs";
+import {
+  PROVIDER_ENV_KEYS,
+  buildDeepseekPastePlans,
+  buildProviderEnvFile,
+  deepseekApiKeyProfileIdsFromConfig,
+  deliverSpawnInput,
+  formatCommandLog,
+  parseDeepseekAuthList,
+} from "./provider-env-sync.mjs";
 
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
 const STATE_DIR =
@@ -270,22 +279,17 @@ async function syncAllowedOrigins() {
   }
 }
 
-const PROVIDER_ENV_KEYS = ["BRAVE_API_KEY", "DEEPSEEK_API_KEY", "DISCORD_BOT_TOKEN", "ASH_DISCORD_BOT_TOKEN", "BOOK_RUNNER_TOKEN"];
-
-/** Mirror Railway/provider secrets into OpenClaw's trusted runtime dotenv + config. */
+/** Mirror Railway/provider secrets into OpenClaw's trusted runtime dotenv + DeepSeek auth profile. */
 async function syncProviderEnvSecrets() {
-  const lines = [];
-  for (const key of PROVIDER_ENV_KEYS) {
-    const value = String(process.env[key] || "").trim();
-    if (value) lines.push(`${key}=${value}`);
-  }
-  if (!lines.length) return;
+  const envFile = buildProviderEnvFile(process.env);
+  if (!envFile) return;
+  const envKeyCount = envFile.trim().split("\n").length;
 
   try {
     fs.mkdirSync(STATE_DIR, { recursive: true });
     const envPath = path.join(STATE_DIR, ".env");
-    fs.writeFileSync(envPath, `${lines.join("\n")}\n`, { encoding: "utf8", mode: 0o600 });
-    log.info("env-sync", `wrote ${lines.length} provider key(s) to ${envPath}`);
+    fs.writeFileSync(envPath, envFile, { encoding: "utf8", mode: 0o600 });
+    log.info("env-sync", `wrote ${envKeyCount} provider key(s) to ${envPath}`);
   } catch (err) {
     log.warn("env-sync", `failed to write ${STATE_DIR}/.env: ${err.message}`);
   }
@@ -333,13 +337,56 @@ async function syncProviderEnvSecrets() {
     );
   }
 
-  if (process.env.DEEPSEEK_API_KEY?.trim()) {
-    const deepseekKey = process.env.DEEPSEEK_API_KEY.trim();
-    const envResult = await runCmd(
-      OPENCLAW_NODE,
-      clawArgs(["config", "set", "env.DEEPSEEK_API_KEY", deepseekKey]),
+  await syncDeepseekAuthProfile();
+}
+
+/**
+ * Replace stored DeepSeek api_key profiles with process.env.DEEPSEEK_API_KEY.
+ * `config set env.DEEPSEEK_API_KEY` is an unknown path on OpenClaw 2026.9.4
+ * (`env` only has `shellEnv` and `vars`) and exits 1 every boot. The stored
+ * profile wins over that env var anyway, so the key is pasted into the auth store.
+ * The key is stdin only; logs keep the exit code and a truncated stderr tail.
+ */
+async function syncDeepseekAuthProfile() {
+  const secret = String(process.env.DEEPSEEK_API_KEY || "").trim();
+  if (!secret) return;
+
+  const listResult = await runCmd(
+    OPENCLAW_NODE,
+    clawArgs(["models", "auth", "list", "--provider", "deepseek", "--json"]),
+  );
+  const list = listResult.code === 0
+    ? parseDeepseekAuthList(listResult.stdout)
+    : { ok: false, ids: [] };
+  let configProfileIds = [];
+  try {
+    configProfileIds = deepseekApiKeyProfileIdsFromConfig(readConfigJson());
+  } catch (err) {
+    log.warn("env-sync", `could not read auth.profiles: ${err.message}`);
+  }
+  if (!list.ok) {
+    log.warn(
+      "env-sync",
+      `${formatCommandLog({
+        label: "models auth list --provider deepseek",
+        code: listResult.code,
+        stderr: listResult.code === 0 ? "profile list unreadable" : listResult.stderr,
+        secrets: [secret],
+      })}; refreshing saved DeepSeek api_key profiles from env`,
     );
-    log.info("env-sync", `config env.DEEPSEEK_API_KEY exit=${envResult.code}`);
+  }
+
+  const plans = buildDeepseekPastePlans({ secret, list, configProfileIds });
+  for (const plan of plans) {
+    const result = await runCmd(OPENCLAW_NODE, clawArgs(plan.args), { input: plan.stdin });
+    const line = formatCommandLog({
+      label: plan.logLabel,
+      code: result.code,
+      stderr: result.stderr,
+      secrets: [secret],
+    });
+    if (result.code === 0) log.info("env-sync", line);
+    else log.warn("env-sync", line);
   }
 }
 
@@ -1633,7 +1680,9 @@ function buildOnboardArgs(payload) {
 
 function runCmd(cmd, args, opts = {}) {
   return new Promise((resolve) => {
-    const { autoInputs: _autoInputs, onOutput, stripOutput, ...spawnOpts } = opts;
+    // autoInputs is unused. Pass `input` to write that string to stdin and close it
+    // (required for `models auth paste-api-key`, which reads the key from a pipe).
+    const { autoInputs: _autoInputs, input, onOutput, stripOutput, ...spawnOpts } = opts;
     const proc = childProcess.spawn(cmd, args, {
       ...spawnOpts,
       env: {
@@ -1644,21 +1693,31 @@ function runCmd(cmd, args, opts = {}) {
     });
 
     let out = "";
-    const append = (d) => {
-      const rawChunk = d.toString("utf8");
-      const streamChunk = stripOutput ? stripAnsi(rawChunk) : rawChunk;
-      out += rawChunk;
+    let stdout = "";
+    let stderr = "";
+    const append = (rawChunk, stream) => {
+      const text = rawChunk.toString("utf8");
+      if (stream === "stdout") stdout += text;
+      else stderr += text;
+      const streamChunk = stripOutput ? stripAnsi(text) : text;
+      out += text;
       onOutput?.(streamChunk);
     };
-    proc.stdout?.on("data", append);
-    proc.stderr?.on("data", append);
+    proc.stdout?.on("data", (d) => append(d, "stdout"));
+    proc.stderr?.on("data", (d) => append(d, "stderr"));
+
+    const finish = (code) => resolve({ code, output: out, stdout, stderr });
 
     proc.on("error", (err) => {
-      out += `\n[spawn error] ${String(err)}\n`;
-      resolve({ code: 127, output: out });
+      const message = `\n[spawn error] ${String(err)}\n`;
+      stderr += message;
+      out += message;
+      finish(127);
     });
 
-    proc.on("close", (code) => resolve({ code: code ?? 0, output: out }));
+    proc.on("close", (code) => finish(code ?? 0));
+
+    if (input != null) deliverSpawnInput(proc.stdin, input);
   });
 }
 
