@@ -3,11 +3,14 @@ import childProcess from "node:child_process";
 import test from "node:test";
 
 import {
+  MAIN_AGENT_ID,
   MODEL_AUTH_PASTE_BY_ENV,
   PROVIDER_ENV_KEYS,
+  agentIdsFromConfig,
   buildDeepseekPastePlans,
   buildProviderEnvFile,
   deepseekApiKeyProfileIdsFromConfig,
+  deepseekAuthListArgs,
   deliverSpawnInput,
   formatCommandLog,
   parseDeepseekAuthList,
@@ -72,34 +75,94 @@ test("reads api_key deepseek profiles from config", () => {
   );
 });
 
-test("refreshes the onboard profile and pipes the key on stdin", () => {
+test("lists main first and keeps the live agent roster", () => {
+  assert.deepEqual(
+    agentIdsFromConfig({
+      agents: {
+        entries: {
+          "ash-editor": {},
+          main: {},
+          "intentbios-coach": {},
+          planner: {},
+          "ash-coldreader": {},
+          "ash-continuity": {},
+        },
+        list: [{ id: "planner" }, "intentbios-sophia"],
+      },
+    }),
+    ["main", "ash-editor", "intentbios-coach", "planner", "ash-coldreader", "ash-continuity", "intentbios-sophia"],
+  );
+  assert.deepEqual(agentIdsFromConfig({}), [MAIN_AGENT_ID]);
+  assert.deepEqual(agentIdsFromConfig({ agents: { entries: { "bad id": {}, "": {} } } }), ["main"]);
+});
+
+test("auth list and paste always pass --agent", () => {
+  assert.deepEqual(deepseekAuthListArgs("main"), [
+    "models",
+    "auth",
+    "list",
+    "--provider",
+    "deepseek",
+    "--agent",
+    "main",
+    "--json",
+  ]);
+  assert.throws(() => deepseekAuthListArgs(""), /--agent/);
   const plans = buildDeepseekPastePlans({
     secret: `  ${KEY}\n`,
+    agentId: "main",
+    always: true,
     list: { ok: true, ids: ["deepseek:default"] },
     configProfileIds: ["deepseek:default"],
   });
-  assert.equal(plans.length, 2);
-  assert.deepEqual(plans[0].args, [
-    "models",
-    "auth",
-    "paste-api-key",
-    "--provider",
-    "deepseek",
-    "--profile-id",
-    "deepseek:default",
-  ]);
-  assert.equal(plans[0].stdin, `${KEY}\n`);
-  assert.equal(plans[1].logLabel, "models auth paste-api-key --provider deepseek");
-  assert.deepEqual(plans[1].args, ["models", "auth", "paste-api-key", "--provider", "deepseek"]);
+  assert.deepEqual(
+    plans.map((plan) => plan.profileId),
+    ["deepseek:default", "deepseek:manual"],
+  );
   for (const plan of plans) {
+    const agentFlag = plan.args.indexOf("--agent");
+    assert.equal(plan.args[agentFlag + 1], "main");
+    assert.equal(plan.args.includes("--profile-id"), true);
+    assert.equal(plan.stdin, `${KEY}\n`);
     assert.equal(plan.args.includes(KEY), false);
     assert.equal(plan.logLabel.includes(KEY), false);
+    assert.match(plan.logLabel, /--agent main/);
   }
 });
 
-test("updates a custom profile id and still covers default and manual", () => {
+test("pastes other agents only for profiles their list returns", () => {
+  const stored = buildDeepseekPastePlans({
+    secret: KEY,
+    agentId: "ash-editor",
+    list: { ok: true, ids: ["deepseek:default"] },
+  });
+  assert.deepEqual(stored.map((plan) => plan.profileId), ["deepseek:default"]);
+  assert.equal(stored[0].args[stored[0].args.indexOf("--agent") + 1], "ash-editor");
+
+  assert.deepEqual(
+    buildDeepseekPastePlans({
+      secret: KEY,
+      agentId: "intentbios-coach",
+      list: { ok: true, ids: [] },
+    }),
+    [],
+  );
+  assert.deepEqual(
+    buildDeepseekPastePlans({
+      secret: KEY,
+      agentId: "planner",
+      list: { ok: false, ids: [] },
+      configProfileIds: ["deepseek:default"],
+    }),
+    [],
+  );
+});
+
+test("main still pastes default and manual when the list fails", () => {
   const plans = buildDeepseekPastePlans({
     secret: KEY,
+    agentId: "main",
+    always: true,
     list: { ok: false, ids: [] },
     configProfileIds: ["deepseek:work"],
   });
@@ -107,25 +170,32 @@ test("updates a custom profile id and still covers default and manual", () => {
     plans.map((plan) => plan.profileId),
     ["deepseek:work", "deepseek:default", "deepseek:manual"],
   );
-  assert.deepEqual(plans[2].args, ["models", "auth", "paste-api-key", "--provider", "deepseek"]);
+  assert.equal(plans.some((plan) => !plan.args.includes("--agent")), false);
 });
 
-test("does not paste when the DeepSeek key is missing", () => {
-  assert.deepEqual(buildDeepseekPastePlans({ secret: "  ", list: { ok: true, ids: ["deepseek:default"] } }), []);
+test("does not paste when the DeepSeek key or agent id is missing", () => {
+  assert.deepEqual(
+    buildDeepseekPastePlans({ secret: "  ", agentId: "main", always: true, list: { ok: true, ids: ["deepseek:default"] } }),
+    [],
+  );
+  assert.deepEqual(
+    buildDeepseekPastePlans({ secret: KEY, agentId: "not an agent", always: true, list: { ok: true, ids: ["deepseek:default"] } }),
+    [],
+  );
 });
 
-test("log line keeps exit code and truncated stderr, and drops the key", () => {
-  const stderr = `${"x".repeat(500)} rejected ${KEY} unauthorized`;
+test("log line is the exit code and drops stderr", () => {
   const line = formatCommandLog({
-    label: "models auth paste-api-key --provider deepseek",
-    code: 1,
-    stderr: `\u001b[31m${stderr}\u001b[0m`,
+    label: "models auth paste-api-key --provider deepseek --agent main --profile-id deepseek:default",
+    code: 0,
+    stderr: `rejected ${KEY}`,
     secrets: [KEY],
   });
-  assert.match(line, /^models auth paste-api-key --provider deepseek exit=1 stderr=/);
+  assert.equal(
+    line,
+    "models auth paste-api-key --provider deepseek --agent main --profile-id deepseek:default exit=0",
+  );
   assert.equal(line.includes(KEY), false);
-  assert.match(line, /\[redacted\] unauthorized$/);
-  assert.ok(line.length < 500);
 });
 
 test("deliverSpawnInput ends stdin with the piped secret", () => {

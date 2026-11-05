@@ -6,7 +6,9 @@
  * On OpenClaw 2026.9.4, `openclaw models auth paste-api-key --provider deepseek`
  * writes only `deepseek:manual` unless `--profile-id` is set. Onboarding stores
  * `deepseek:default`, and a 401 on that profile does not fail over to another
- * key. Refresh every saved api_key profile, and those two ids, from the env key.
+ * key. With more than one agent configured, both `models auth list` and
+ * `paste-api-key` exit 1 unless `--agent <id>` is set. Refresh saved api_key
+ * profiles per agent, always including `main`.
  *
  * `openclaw config set env.DEEPSEEK_API_KEY` is not a substitute: the `env`
  * object only allows `shellEnv` and `vars`, so that path is unknown and exits 1.
@@ -30,9 +32,12 @@ export const MODEL_AUTH_PASTE_BY_ENV = {
 };
 
 const DEEPSEEK_PROFILE_ID = /^deepseek:[A-Za-z0-9._:-]+$/;
+const AGENT_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,128}$/;
 const ONBOARD_DEEPSEEK_PROFILE_ID = "deepseek:default";
 const PASTE_DEFAULT_DEEPSEEK_PROFILE_ID = "deepseek:manual";
-export const ENV_SYNC_STDERR_MAX = 400;
+
+/** Discord @intentbios is bound to this agent. Every boot pastes its DeepSeek profiles. */
+export const MAIN_AGENT_ID = "main";
 
 export function buildProviderEnvFile(env) {
   const lines = [];
@@ -49,6 +54,10 @@ export function stripAnsi(value) {
     .replace(/\x1b\[[\x20-\x3f]*[\x40-\x7e]/g, "");
 }
 
+export function isAgentId(id) {
+  return typeof id === "string" && AGENT_ID.test(id);
+}
+
 function uniqueIds(ids) {
   const out = [];
   for (const id of ids) {
@@ -56,6 +65,33 @@ function uniqueIds(ids) {
     if (!out.includes(id)) out.push(id);
   }
   return out;
+}
+
+/**
+ * Configured agent ids, `main` first.
+ * Reads `agents.entries` and `agents.list` (the same roster boot already merges).
+ */
+export function agentIdsFromConfig(config) {
+  const ids = [];
+  const add = (id) => {
+    if (!isAgentId(id) || ids.includes(id)) return;
+    ids.push(id);
+  };
+  add(MAIN_AGENT_ID);
+  const entries = config?.agents?.entries;
+  if (entries && typeof entries === "object" && !Array.isArray(entries)) {
+    for (const id of Object.keys(entries)) add(id);
+  }
+  if (Array.isArray(config?.agents?.list)) {
+    for (const entry of config.agents.list) add(typeof entry === "string" ? entry : entry?.id);
+  }
+  return [MAIN_AGENT_ID, ...ids.filter((id) => id !== MAIN_AGENT_ID)];
+}
+
+/** `models auth list` for one agent. Never omits `--agent`. */
+export function deepseekAuthListArgs(agentId) {
+  if (!isAgentId(agentId)) throw new Error("deepseek auth list requires --agent <id>");
+  return ["models", "auth", "list", "--provider", "deepseek", "--agent", agentId, "--json"];
 }
 
 /**
@@ -99,45 +135,48 @@ export function deepseekApiKeyProfileIdsFromConfig(config) {
 }
 
 /**
- * Profile ids to overwrite with the current DEEPSEEK_API_KEY.
- * A failed list still uses config ids. The onboard id and the paste default
- * are always covered so a stale winner cannot keep the previous key.
+ * Paste plans for one agent. Every plan includes `--agent`.
+ * `main` (`always`) refreshes every discovered api_key profile plus onboard
+ * `deepseek:default` and paste `deepseek:manual`. Other agents are pasted only
+ * for profile ids their own auth list returns.
  */
-export function buildDeepseekPastePlans({ secret, list, configProfileIds = [] }) {
+export function buildDeepseekPastePlans({ secret, agentId, list, configProfileIds = [], always = false }) {
   const trimmed = String(secret ?? "").trim();
-  if (!trimmed) return [];
-  const stdin = `${trimmed}\n`;
+  if (!trimmed || !isAgentId(agentId)) return [];
   const discovered = list?.ok
-    ? uniqueIds([...(list.ids || []), ...configProfileIds])
-    : uniqueIds(configProfileIds);
-  const ids = discovered.includes(ONBOARD_DEEPSEEK_PROFILE_ID)
-    ? discovered
-    : [...discovered, ONBOARD_DEEPSEEK_PROFILE_ID];
-  const plans = ids.map((profileId) => ({
-    profileId,
-    args: ["models", "auth", "paste-api-key", "--provider", "deepseek", "--profile-id", profileId],
-    stdin,
-    logLabel: `models auth paste-api-key --provider deepseek --profile-id ${profileId}`,
-  }));
-  if (!ids.includes(PASTE_DEFAULT_DEEPSEEK_PROFILE_ID)) {
-    plans.push({
-      profileId: PASTE_DEFAULT_DEEPSEEK_PROFILE_ID,
-      args: ["models", "auth", "paste-api-key", "--provider", "deepseek"],
-      stdin,
-      logLabel: "models auth paste-api-key --provider deepseek",
-    });
+    ? uniqueIds([...(list.ids || []), ...(always ? configProfileIds : [])])
+    : always
+      ? uniqueIds(configProfileIds)
+      : [];
+  if (!always && discovered.length === 0) return [];
+  const ids = [...discovered];
+  if (always) {
+    if (!ids.includes(ONBOARD_DEEPSEEK_PROFILE_ID)) ids.push(ONBOARD_DEEPSEEK_PROFILE_ID);
+    if (!ids.includes(PASTE_DEFAULT_DEEPSEEK_PROFILE_ID)) ids.push(PASTE_DEFAULT_DEEPSEEK_PROFILE_ID);
   }
-  return plans;
+  const stdin = `${trimmed}\n`;
+  return ids.map((profileId) => ({
+    agentId,
+    profileId,
+    args: [
+      "models",
+      "auth",
+      "paste-api-key",
+      "--provider",
+      "deepseek",
+      "--agent",
+      agentId,
+      "--profile-id",
+      profileId,
+    ],
+    stdin,
+    logLabel: `models auth paste-api-key --provider deepseek --agent ${agentId} --profile-id ${profileId}`,
+  }));
 }
 
-export function formatCommandLog({ label, code, stderr, secrets = [] }) {
-  let text = stripAnsi(String(stderr ?? "")).replace(/\s+/g, " ").trim();
-  for (const secret of secrets) {
-    const value = String(secret ?? "");
-    if (value) text = text.split(value).join("[redacted]");
-  }
-  if (text.length > ENV_SYNC_STDERR_MAX) text = text.slice(-ENV_SYNC_STDERR_MAX);
-  return text ? `${label} exit=${code} stderr=${text}` : `${label} exit=${code}`;
+/** Exit code only. Stderr is ignored so a key echoed by the CLI cannot reach the log. */
+export function formatCommandLog({ label, code }) {
+  return `${label} exit=${code}`;
 }
 
 /** Write `input` to a child stdin and close it. Swallows EPIPE. */
