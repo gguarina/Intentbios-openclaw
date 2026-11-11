@@ -195,26 +195,40 @@ async function intentbiosMcpCall(
   return normalizeMcpToolResult(called.payload);
 }
 
-function buildApartmentPickArguments(args, userId) {
+function buildApartmentPickArguments(args) {
   const intentId = String(args.intentId || "").trim();
   if (!intentId) throw new Error("intentId is required");
   const rowIds = Array.isArray(args.rowIds)
     ? args.rowIds.map((id) => String(id).trim()).filter(Boolean)
     : [];
-  const pickPhrase = String(args.pickPhrase || args.phrase || "").trim();
-  if (!rowIds.length && !pickPhrase) throw new Error("rowIds or pickPhrase is required");
-  const out = { intentId, userId };
+  const indexes = Array.isArray(args.indexes)
+    ? args.indexes
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value) && value >= 1)
+        .map((value) => Math.trunc(value))
+    : [];
+  const message = String(args.message || "").trim();
+  if (!rowIds.length && !indexes.length && !message) {
+    throw new Error("rowIds, indexes, or message is required");
+  }
+  const out = { intentId };
   if (rowIds.length) out.rowIds = rowIds;
-  if (pickPhrase) out.pickPhrase = pickPhrase;
+  if (indexes.length) out.indexes = indexes;
+  if (message) out.message = message;
   return out;
 }
 
-function buildApartmentDraftArguments(args, userId) {
+function buildApartmentDraftArguments(args) {
   const intentId = String(args.intentId || "").trim();
-  const rowId = String(args.rowId || "").trim();
   if (!intentId) throw new Error("intentId is required");
-  if (!rowId) throw new Error("rowId is required");
-  const out = { intentId, rowId, userId };
+  const out = { intentId };
+  const rowId = String(args.rowId || "").trim();
+  if (rowId) out.rowId = rowId;
+  if (args.index != null && args.index !== "") {
+    const index = Number(args.index);
+    if (!Number.isFinite(index) || index < 1) throw new Error("index must be a positive number");
+    out.index = Math.trunc(index);
+  }
   const kind = String(args.kind || "").trim().toLowerCase();
   if (kind) {
     const allowed = new Set(["application", "viewing", "question"]);
@@ -223,8 +237,8 @@ function buildApartmentDraftArguments(args, userId) {
     }
     out.kind = kind;
   }
-  const revisionInstruction = String(args.revisionInstruction || args.instruction || "").trim();
-  if (revisionInstruction) out.revisionInstruction = revisionInstruction;
+  const message = String(args.message || "").trim();
+  if (message) out.message = message;
   return out;
 }
 
@@ -688,12 +702,12 @@ export async function executeIntentbiosTool(toolName, args = {}, options = {}) {
 
   if (name === "apartment_pick") {
     if (!mcpApiKey) throw new Error("INTENTBIOS_MCP_API_KEY is required for apartment_pick");
-    return callMcp("apartment_pick", buildApartmentPickArguments(args, userId));
+    return callMcp("apartment_pick", buildApartmentPickArguments(args));
   }
 
   if (name === "apartment_draft") {
     if (!mcpApiKey) throw new Error("INTENTBIOS_MCP_API_KEY is required for apartment_draft");
-    return callMcp("apartment_draft", buildApartmentDraftArguments(args, userId));
+    return callMcp("apartment_draft", buildApartmentDraftArguments(args));
   }
 
   const intentId = String(args.intentId || "").trim();

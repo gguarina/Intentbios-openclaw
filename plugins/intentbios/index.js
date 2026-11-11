@@ -113,9 +113,14 @@ const TOOLS = {
           items: { type: "string" },
           description: "Listing row ids from the search table.",
         },
-        pickPhrase: {
+        indexes: {
+          type: "array",
+          items: { type: "number" },
+          description: "1-based row numbers from the search table.",
+        },
+        message: {
           type: "string",
-          description: "Natural-language pick, e.g. take 1 and 3.",
+          description: "Free-text pick phrase, e.g. take 1 and 3.",
         },
         userId: { type: "string" },
         sessionKey: { type: "string" },
@@ -131,20 +136,24 @@ const TOOLS = {
       additionalProperties: false,
       properties: {
         intentId: { type: "string" },
-        rowId: { type: "string" },
+        rowId: { type: "string", description: "Listing row id." },
+        index: {
+          type: "number",
+          description: "1-based row number when rowId is not used.",
+        },
         kind: {
           type: "string",
           enum: ["application", "viewing", "question"],
           description: "Draft type; defaults inside Intentbios when omitted.",
         },
-        revisionInstruction: {
+        message: {
           type: "string",
-          description: "How to revise an existing draft.",
+          description: "Draft request or revision instruction (e.g. make it more formal).",
         },
         userId: { type: "string" },
         sessionKey: { type: "string" },
       },
-      required: ["intentId", "rowId", "userId"],
+      required: ["intentId", "userId"],
     },
   },
 };

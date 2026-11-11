@@ -814,16 +814,49 @@ test("apartment_pick proxies MCP tools/call", async () => {
     assert.equal(call.body.params.name, "apartment_pick");
     assert.deepEqual(call.body.params.arguments, {
       intentId: "intent_apt",
-      userId: "guest_test",
       rowIds: ["row-1", "row-3"],
     });
-    assert.equal(call.body.params.arguments.pickPhrase, undefined);
+    assert.equal(call.headers?.["x-user-id"] || call.userId, "guest_test");
   } finally {
     await server.close();
   }
 });
 
-test("apartment_pick requires rowIds or pickPhrase", async () => {
+test("apartment_pick forwards indexes and message to MCP", async () => {
+  let toolArgs = null;
+  const server = await listen(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    res.setHeader("Content-Type", "application/json");
+    if (req.url === "/mcp" && body.method === "tools/call") {
+      toolArgs = body.params.arguments;
+      res.writeHead(200);
+      res.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { structuredContent: { ok: true } } }));
+      return;
+    }
+    if (req.url === "/mcp" && body.method === "initialize") {
+      res.writeHead(200);
+      res.end(JSON.stringify({ jsonrpc: "2.0", id: "init", result: {} }));
+      return;
+    }
+    res.writeHead(404);
+    res.end("{}");
+  });
+
+  try {
+    await executeIntentbiosTool(
+      "apartment_pick",
+      { intentId: "intent_apt", indexes: [1, 3], message: "take 1 and 3", userId: "guest_test" },
+      { baseUrl: server.baseUrl, mcpApiKey: "test-key" },
+    );
+    assert.deepEqual(toolArgs, { intentId: "intent_apt", indexes: [1, 3], message: "take 1 and 3" });
+  } finally {
+    await server.close();
+  }
+});
+
+test("apartment_pick requires rowIds, indexes, or message", async () => {
   await assert.rejects(
     () =>
       executeIntentbiosTool(
@@ -831,11 +864,11 @@ test("apartment_pick requires rowIds or pickPhrase", async () => {
         { intentId: "intent_apt", userId: "guest_test" },
         { baseUrl: "https://example.test", mcpApiKey: "test-key" },
       ),
-    /rowIds or pickPhrase/,
+    /rowIds, indexes, or message/,
   );
 });
 
-test("apartment_draft sends kind and revisionInstruction to MCP", async () => {
+test("apartment_draft sends kind and message to MCP", async () => {
   let toolArgs = null;
   const server = await listen(async (req, res) => {
     const chunks = [];
@@ -868,9 +901,9 @@ test("apartment_draft sends kind and revisionInstruction to MCP", async () => {
       "apartment_draft",
       {
         intentId: "intent_apt",
-        rowId: "row-1",
+        index: 1,
         kind: "application",
-        revisionInstruction: "shorter",
+        message: "make it more formal",
         userId: "guest_test",
       },
       { baseUrl: server.baseUrl, mcpApiKey: "test-key" },
@@ -878,10 +911,9 @@ test("apartment_draft sends kind and revisionInstruction to MCP", async () => {
     assert.equal(out.draft, "Hello landlord");
     assert.deepEqual(toolArgs, {
       intentId: "intent_apt",
-      rowId: "row-1",
-      userId: "guest_test",
+      index: 1,
       kind: "application",
-      revisionInstruction: "shorter",
+      message: "make it more formal",
     });
   } finally {
     await server.close();

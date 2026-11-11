@@ -9,8 +9,8 @@ OpenClaw plugin `intentbios` registers coach tools against the Intentbios HTTP A
 | `intent_execute` | `intent.execute` | `POST /api/intents/:id/execute` body `{ actionTarget, payload, userId }` |
 | `state_snapshot` | `state.snapshot` | `GET /api/intents/:id/journey-graphs` |
 | `lesson_status` | `lesson.status` | `GET /api/intents/:id`, then `GET /api/goals/:goalId` and `GET /api/goals/:goalId/status` |
-| `apartment_pick` | — | MCP `apartment_pick` (`intentId`, `rowIds` and/or `pickPhrase`) |
-| `apartment_draft` | — | MCP `apartment_draft` (`intentId`, `rowId`, optional `kind`, optional `revisionInstruction`) |
+| `apartment_pick` | — | MCP `apartment_pick` (`intentId`, optional `rowIds`, `indexes`, `message`) |
+| `apartment_draft` | — | MCP `apartment_draft` (`intentId`, optional `rowId`, `index`, `kind`, `message`) |
 
 `intent_execute` requires `actionTarget`. Aliases: `clarify` → `clarifyIntent`, `lock` → `lockDecision`.
 

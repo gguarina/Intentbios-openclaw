@@ -9,7 +9,7 @@ These tools call the Intentbios HTTP API. They do not contain lesson content.
 | `intent_execute` | Run the current Intentbios step. |
 | `state_snapshot` | Read the intent state. |
 | `lesson_status` | Read lesson status. Do not author a lesson if this is empty. |
-| `apartment_pick` | Record picked listing rows (`rowIds` or `pickPhrase`). |
-| `apartment_draft` | Draft an application, viewing request, or question for one row. Never send it to the landlord. |
+| `apartment_pick` | Record picked listing rows (`rowIds`, `indexes`, and/or `message`). |
+| `apartment_draft` | Draft for one row (`rowId` or `index`, optional `kind`, `message`). Never send it to the landlord. |
 
 Pass `intentId` from `intent_create` on every later call. Pass `userId` when the conversation has one.
