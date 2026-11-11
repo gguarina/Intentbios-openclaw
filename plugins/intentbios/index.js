@@ -100,6 +100,62 @@ const TOOLS = {
       required: ["intentId", "userId"],
     },
   },
+  apartment_pick: {
+    description:
+      "Record which apartment listing rows the user picked. Proxied to Intentbios MCP apartment_pick.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        intentId: { type: "string" },
+        rowIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "Listing row ids from the search table.",
+        },
+        indexes: {
+          type: "array",
+          items: { type: "number" },
+          description: "1-based row numbers from the search table.",
+        },
+        message: {
+          type: "string",
+          description: "Free-text pick phrase, e.g. take 1 and 3.",
+        },
+        userId: { type: "string" },
+        sessionKey: { type: "string" },
+      },
+      required: ["intentId", "userId"],
+    },
+  },
+  apartment_draft: {
+    description:
+      "Draft an application, viewing request, or landlord question for a listing row. Proxied to Intentbios MCP apartment_draft. The user sends it themselves.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        intentId: { type: "string" },
+        rowId: { type: "string", description: "Listing row id." },
+        index: {
+          type: "number",
+          description: "1-based row number when rowId is not used.",
+        },
+        kind: {
+          type: "string",
+          enum: ["application", "viewing", "question"],
+          description: "Draft type; defaults inside Intentbios when omitted.",
+        },
+        message: {
+          type: "string",
+          description: "Draft request or revision instruction (e.g. make it more formal).",
+        },
+        userId: { type: "string" },
+        sessionKey: { type: "string" },
+      },
+      required: ["intentId", "userId"],
+    },
+  },
 };
 
 function pluginSettings(api) {
@@ -541,6 +597,7 @@ export default {
                 baseUrl: settings.baseUrl,
                 defaultUserId: settings.defaultUserId,
                 sessionKey: sessionKeyFromContext(ctx, params),
+                mcpApiKey: process.env.INTENTBIOS_MCP_API_KEY,
               });
               return {
                 content: [{ type: "text", text: JSON.stringify(details) }],

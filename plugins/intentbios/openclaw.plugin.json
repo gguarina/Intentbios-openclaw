@@ -12,7 +12,9 @@
       "journey_message",
       "intent_execute",
       "state_snapshot",
-      "lesson_status"
+      "lesson_status",
+      "apartment_pick",
+      "apartment_draft"
     ]
   },
   "configSchema": {

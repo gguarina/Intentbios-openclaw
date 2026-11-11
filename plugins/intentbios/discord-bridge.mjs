@@ -92,7 +92,7 @@ export function discordChannelFromSessionKey(sessionKey) {
   return matches.length ? matches[matches.length - 1][1] : null;
 }
 
-const COACH_TOOL = /(^|__|\.)(intent_create|journey_message|coach_status|lesson_status|state_snapshot|intent_execute|step_done|journey_initiate)$/;
+const COACH_TOOL = /(^|__|\.)(intent_create|journey_message|coach_status|lesson_status|state_snapshot|intent_execute|step_done|journey_initiate|apartment_pick|apartment_draft)$/;
 export function isIntentbiosTool(toolName) {
   const name = String(toolName || "");
   return COACH_TOOL.test(name) || name.startsWith("intentbios__");

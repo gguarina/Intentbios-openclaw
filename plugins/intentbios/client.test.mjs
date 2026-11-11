@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import test from "node:test";
-import { executeIntentbiosTool } from "./client.mjs";
+import {
+  executeIntentbiosTool,
+  normalizeMcpToolResult,
+  parseMcpHttpPayload,
+} from "./client.mjs";
 
 function listen(handler) {
   const server = http.createServer(handler);
@@ -739,6 +743,178 @@ test("intent create forwards coachCard and does not invent one", async () => {
     );
     assert.equal(plain.coachCard, undefined);
     assert.equal(plain.intentId, "intent_example");
+  } finally {
+    await server.close();
+  }
+});
+
+test("parseMcpHttpPayload accepts JSON and SSE bodies", () => {
+  assert.deepEqual(parseMcpHttpPayload('{"jsonrpc":"2.0","id":1}'), { jsonrpc: "2.0", id: 1 });
+  const sse = parseMcpHttpPayload('event: message\ndata: {"jsonrpc":"2.0","result":{"ok":true}}\n\n');
+  assert.deepEqual(sse, { jsonrpc: "2.0", result: { ok: true } });
+});
+
+test("normalizeMcpToolResult forwards coachCard from structuredContent", () => {
+  const out = normalizeMcpToolResult({
+    result: {
+      structuredContent: {
+        reply: "Picked rows 1 and 3.",
+        coachCard: { summary: "Two favorites", deepLink: "https://app/?intentId=i", suggestedReplies: [] },
+      },
+    },
+  });
+  assert.equal(out.reply, "Picked rows 1 and 3.");
+  assert.equal(out.coachCard.summary, "Two favorites");
+});
+
+test("apartment_pick proxies MCP tools/call", async () => {
+  const seen = [];
+  const server = await listen(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const raw = Buffer.concat(chunks).toString("utf8");
+    const body = raw ? JSON.parse(raw) : {};
+    seen.push({ url: req.url, method: req.method, userId: req.headers["x-user-id"], body });
+    res.setHeader("Content-Type", "application/json");
+    if (req.url === "/mcp" && body.method === "tools/call") {
+      res.writeHead(200);
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          result: {
+            structuredContent: {
+              intentId: body.params.arguments.intentId,
+              picked: body.params.arguments.rowIds,
+              coachCard: { summary: "Saved your picks", deepLink: "https://app/?intentId=i", suggestedReplies: [] },
+            },
+          },
+        }),
+      );
+      return;
+    }
+    if (req.url === "/mcp" && body.method === "initialize") {
+      res.writeHead(200);
+      res.end(JSON.stringify({ jsonrpc: "2.0", id: "init", result: { protocolVersion: "2024-11-05" } }));
+      return;
+    }
+    res.writeHead(404);
+    res.end("{}");
+  });
+
+  try {
+    const out = await executeIntentbiosTool(
+      "apartment_pick",
+      { intentId: "intent_apt", rowIds: ["row-1", "row-3"], userId: "guest_test" },
+      { baseUrl: server.baseUrl, mcpApiKey: "test-key" },
+    );
+    assert.deepEqual(out.picked, ["row-1", "row-3"]);
+    assert.equal(out.coachCard.summary, "Saved your picks");
+    const call = seen.find((row) => row.body?.method === "tools/call");
+    assert.equal(call.body.params.name, "apartment_pick");
+    assert.deepEqual(call.body.params.arguments, {
+      intentId: "intent_apt",
+      rowIds: ["row-1", "row-3"],
+    });
+    assert.equal(call.headers?.["x-user-id"] || call.userId, "guest_test");
+  } finally {
+    await server.close();
+  }
+});
+
+test("apartment_pick forwards indexes and message to MCP", async () => {
+  let toolArgs = null;
+  const server = await listen(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    res.setHeader("Content-Type", "application/json");
+    if (req.url === "/mcp" && body.method === "tools/call") {
+      toolArgs = body.params.arguments;
+      res.writeHead(200);
+      res.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { structuredContent: { ok: true } } }));
+      return;
+    }
+    if (req.url === "/mcp" && body.method === "initialize") {
+      res.writeHead(200);
+      res.end(JSON.stringify({ jsonrpc: "2.0", id: "init", result: {} }));
+      return;
+    }
+    res.writeHead(404);
+    res.end("{}");
+  });
+
+  try {
+    await executeIntentbiosTool(
+      "apartment_pick",
+      { intentId: "intent_apt", indexes: [1, 3], message: "take 1 and 3", userId: "guest_test" },
+      { baseUrl: server.baseUrl, mcpApiKey: "test-key" },
+    );
+    assert.deepEqual(toolArgs, { intentId: "intent_apt", indexes: [1, 3], message: "take 1 and 3" });
+  } finally {
+    await server.close();
+  }
+});
+
+test("apartment_pick requires rowIds, indexes, or message", async () => {
+  await assert.rejects(
+    () =>
+      executeIntentbiosTool(
+        "apartment_pick",
+        { intentId: "intent_apt", userId: "guest_test" },
+        { baseUrl: "https://example.test", mcpApiKey: "test-key" },
+      ),
+    /rowIds, indexes, or message/,
+  );
+});
+
+test("apartment_draft sends kind and message to MCP", async () => {
+  let toolArgs = null;
+  const server = await listen(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    res.setHeader("Content-Type", "application/json");
+    if (req.url === "/mcp" && body.method === "tools/call") {
+      toolArgs = body.params.arguments;
+      res.writeHead(200);
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          result: { structuredContent: { draft: "Hello landlord", intentId: toolArgs.intentId } },
+        }),
+      );
+      return;
+    }
+    if (req.url === "/mcp" && body.method === "initialize") {
+      res.writeHead(200);
+      res.end(JSON.stringify({ jsonrpc: "2.0", id: "init", result: {} }));
+      return;
+    }
+    res.writeHead(404);
+    res.end("{}");
+  });
+
+  try {
+    const out = await executeIntentbiosTool(
+      "apartment_draft",
+      {
+        intentId: "intent_apt",
+        index: 1,
+        kind: "application",
+        message: "make it more formal",
+        userId: "guest_test",
+      },
+      { baseUrl: server.baseUrl, mcpApiKey: "test-key" },
+    );
+    assert.equal(out.draft, "Hello landlord");
+    assert.deepEqual(toolArgs, {
+      intentId: "intent_apt",
+      index: 1,
+      kind: "application",
+      message: "make it more formal",
+    });
   } finally {
     await server.close();
   }
