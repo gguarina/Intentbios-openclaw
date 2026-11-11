@@ -100,6 +100,53 @@ const TOOLS = {
       required: ["intentId", "userId"],
     },
   },
+  apartment_pick: {
+    description:
+      "Record which apartment listing rows the user picked. Proxied to Intentbios MCP apartment_pick.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        intentId: { type: "string" },
+        rowIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "Listing row ids from the search table.",
+        },
+        pickPhrase: {
+          type: "string",
+          description: "Natural-language pick, e.g. take 1 and 3.",
+        },
+        userId: { type: "string" },
+        sessionKey: { type: "string" },
+      },
+      required: ["intentId", "userId"],
+    },
+  },
+  apartment_draft: {
+    description:
+      "Draft an application, viewing request, or landlord question for a listing row. Proxied to Intentbios MCP apartment_draft. The user sends it themselves.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        intentId: { type: "string" },
+        rowId: { type: "string" },
+        kind: {
+          type: "string",
+          enum: ["application", "viewing", "question"],
+          description: "Draft type; defaults inside Intentbios when omitted.",
+        },
+        revisionInstruction: {
+          type: "string",
+          description: "How to revise an existing draft.",
+        },
+        userId: { type: "string" },
+        sessionKey: { type: "string" },
+      },
+      required: ["intentId", "rowId", "userId"],
+    },
+  },
 };
 
 function pluginSettings(api) {
@@ -541,6 +588,7 @@ export default {
                 baseUrl: settings.baseUrl,
                 defaultUserId: settings.defaultUserId,
                 sessionKey: sessionKeyFromContext(ctx, params),
+                mcpApiKey: process.env.INTENTBIOS_MCP_API_KEY,
               });
               return {
                 content: [{ type: "text", text: JSON.stringify(details) }],

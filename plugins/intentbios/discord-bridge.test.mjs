@@ -42,6 +42,8 @@ test("session keys name the Discord thread; non-Discord sessions do not", () => 
 test("intentbios tools are recognised (plugin and MCP names)", () => {
   assert.ok(isIntentbiosTool("intentbios__journey_message"));
   assert.ok(isIntentbiosTool("coach_status"));
+  assert.ok(isIntentbiosTool("intentbios__apartment_pick"));
+  assert.ok(isIntentbiosTool("apartment_draft"));
   assert.ok(!isIntentbiosTool("message"));
 });
 

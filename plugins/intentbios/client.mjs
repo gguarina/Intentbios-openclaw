@@ -3,13 +3,18 @@
  * Lesson generation and Ask-complete rules stay inside Intentbios.
  */
 
-export const COACH_TOOL_NAMES = [
+export const HTTP_COACH_TOOL_NAMES = [
   "intent_create",
   "journey_message",
   "intent_execute",
   "state_snapshot",
   "lesson_status",
 ];
+
+/** Proxied via Intentbios MCP (`POST /mcp`, `tools/call`). */
+export const MCP_COACH_TOOL_NAMES = ["apartment_pick", "apartment_draft"];
+
+export const COACH_TOOL_NAMES = [...HTTP_COACH_TOOL_NAMES, ...MCP_COACH_TOOL_NAMES];
 
 const TOOL_ALIASES = {
   "intent.create": "intent_create",
@@ -62,6 +67,165 @@ function joinUrl(baseUrl, pathname) {
     throw new Error("INTENTBIOS_API_URL is not configured");
   }
   return `${base}${pathname}`;
+}
+
+/** Parse JSON or SSE (`data:`) bodies from the Intentbios MCP HTTP transport. */
+export function parseMcpHttpPayload(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return {};
+  if (raw.startsWith("{") || raw.startsWith("[")) {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return { raw: raw.slice(0, 500) };
+    }
+  }
+  const events = [];
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+    const payload = trimmed.slice(5).trim();
+    if (!payload || payload === "[DONE]") continue;
+    try {
+      events.push(JSON.parse(payload));
+    } catch {
+      /* ignore partial SSE chunks */
+    }
+  }
+  return events.length ? events[events.length - 1] : { raw: raw.slice(0, 500) };
+}
+
+/** Flatten an MCP `tools/call` JSON-RPC payload for the OpenClaw tool result. */
+export function normalizeMcpToolResult(payload) {
+  const envelope = payload && typeof payload === "object" ? payload : {};
+  if (envelope.error) {
+    const message = envelope.error.message || envelope.error.data || "Intentbios MCP tool failed";
+    throw Object.assign(new Error(String(message)), { body: envelope });
+  }
+  const result = envelope.result;
+  if (!result) return envelope;
+  if (result.structuredContent && typeof result.structuredContent === "object") {
+    const out = { ...result.structuredContent };
+    const card = coachCardFromBody(out);
+    if (card) out.coachCard = card;
+    return out;
+  }
+  const text = (Array.isArray(result.content) ? result.content : [])
+    .filter((part) => part?.type === "text")
+    .map((part) => String(part.text || ""))
+    .join("\n")
+    .trim();
+  let parsed = null;
+  if (text) {
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = { reply: text };
+    }
+  }
+  const out = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? { ...parsed } : { reply: text || null };
+  const card = coachCardFromBody(out);
+  if (card) out.coachCard = card;
+  return out;
+}
+
+async function intentbiosMcpCall(
+  fetchImpl,
+  baseUrl,
+  { userId, sessionKey, apiKey, toolName, arguments: toolArgs },
+) {
+  const mcpUrl = joinUrl(baseUrl, "/mcp");
+  const headers = {
+    Accept: "application/json, text/event-stream",
+    "Content-Type": "application/json",
+    "x-user-id": userId,
+  };
+  if (sessionKey) headers["x-intentbios-session"] = sessionKey;
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+
+  const post = async (body, extraHeaders = {}) => {
+    const res = await fetchImpl(mcpUrl, {
+      method: "POST",
+      headers: { ...headers, ...extraHeaders },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(120_000),
+    });
+    const text = await res.text();
+    const sessionId = res.headers.get("mcp-session-id") || res.headers.get("Mcp-Session-Id");
+    const payload = parseMcpHttpPayload(text);
+    if (!res.ok && !payload?.result && !payload?.error?.message) {
+      const message = payload?.error || payload?.message || `Intentbios MCP HTTP ${res.status}`;
+      const error = new Error(String(message));
+      error.status = res.status;
+      error.body = payload;
+      throw error;
+    }
+    return { payload, sessionId };
+  };
+
+  let sessionHeaders = {};
+  try {
+    const init = await post({
+      jsonrpc: "2.0",
+      id: "init",
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "openclaw-intentbios-plugin", version: "1.0.0" },
+      },
+    });
+    if (init.sessionId) sessionHeaders = { "mcp-session-id": init.sessionId };
+    await post({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }, sessionHeaders).catch(
+      () => {},
+    );
+  } catch {
+    // Stateless MCP may accept tools/call without initialize.
+  }
+
+  const called = await post(
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: toolName, arguments: toolArgs },
+    },
+    sessionHeaders,
+  );
+  return normalizeMcpToolResult(called.payload);
+}
+
+function buildApartmentPickArguments(args, userId) {
+  const intentId = String(args.intentId || "").trim();
+  if (!intentId) throw new Error("intentId is required");
+  const rowIds = Array.isArray(args.rowIds)
+    ? args.rowIds.map((id) => String(id).trim()).filter(Boolean)
+    : [];
+  const pickPhrase = String(args.pickPhrase || args.phrase || "").trim();
+  if (!rowIds.length && !pickPhrase) throw new Error("rowIds or pickPhrase is required");
+  const out = { intentId, userId };
+  if (rowIds.length) out.rowIds = rowIds;
+  if (pickPhrase) out.pickPhrase = pickPhrase;
+  return out;
+}
+
+function buildApartmentDraftArguments(args, userId) {
+  const intentId = String(args.intentId || "").trim();
+  const rowId = String(args.rowId || "").trim();
+  if (!intentId) throw new Error("intentId is required");
+  if (!rowId) throw new Error("rowId is required");
+  const out = { intentId, rowId, userId };
+  const kind = String(args.kind || "").trim().toLowerCase();
+  if (kind) {
+    const allowed = new Set(["application", "viewing", "question"]);
+    if (!allowed.has(kind)) {
+      throw new Error("kind must be application, viewing, or question");
+    }
+    out.kind = kind;
+  }
+  const revisionInstruction = String(args.revisionInstruction || args.instruction || "").trim();
+  if (revisionInstruction) out.revisionInstruction = revisionInstruction;
+  return out;
 }
 
 async function requestJson(fetchImpl, url, { method, userId, sessionKey, body }) {
@@ -401,11 +565,20 @@ export async function executeIntentbiosTool(toolName, args = {}, options = {}) {
     );
   }
   const baseUrl = options.baseUrl;
+  const mcpApiKey = String(options.mcpApiKey || "").trim();
   const call = (pathname, init) =>
     requestJson(fetchImpl, joinUrl(baseUrl, pathname), {
       userId,
       sessionKey,
       ...init,
+    });
+  const callMcp = (tool, toolArgs) =>
+    intentbiosMcpCall(fetchImpl, baseUrl, {
+      userId,
+      sessionKey,
+      apiKey: mcpApiKey,
+      toolName: tool,
+      arguments: toolArgs,
     });
 
   if (name === "intent_create") {
@@ -511,6 +684,16 @@ export async function executeIntentbiosTool(toolName, args = {}, options = {}) {
       { method: "GET" },
     );
     return compactJourneyGraphs({ ...graphs, intentId: graphs.intentId || intentId });
+  }
+
+  if (name === "apartment_pick") {
+    if (!mcpApiKey) throw new Error("INTENTBIOS_MCP_API_KEY is required for apartment_pick");
+    return callMcp("apartment_pick", buildApartmentPickArguments(args, userId));
+  }
+
+  if (name === "apartment_draft") {
+    if (!mcpApiKey) throw new Error("INTENTBIOS_MCP_API_KEY is required for apartment_draft");
+    return callMcp("apartment_draft", buildApartmentDraftArguments(args, userId));
   }
 
   const intentId = String(args.intentId || "").trim();
